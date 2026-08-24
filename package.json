@@ -18,14 +18,30 @@
     "review"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
+  "packageManager": "bun@1.4.0",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "build": "esbuild server/src/server.mjs --bundle --platform=node --format=cjs --target=node20 --outfile=server/dist/server.cjs && esbuild web/src/png-decoder.mjs --bundle --platform=browser --format=iife --global-name=MarkdownReviewPng --target=chrome120 --outfile=web/dist/png-decoder.js",
-    "browser:harness": "node scripts/browser-harness.mjs",
-    "pretest": "npm run build",
-    "test": "node scripts/smoke-test.mjs && node scripts/png-decoder-smoke-test.mjs && node scripts/ui-smoke-test.mjs"
+    "build": "bun scripts/build.ts",
+    "build:check": "bun scripts/build.ts --check",
+    "browser:harness": "bun tests/harness/browser-harness.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "tsc -b",
+    "test": "bun test packages web/src/*.test.ts tests/integration tests/property scripts/*.test.ts",
+    "test:coverage": "bun test --coverage packages web/src/*.test.ts tests/integration tests/property scripts/*.test.ts && bun scripts/check-coverage.ts",
+    "test:e2e": "playwright test --project=chromium --project=webkit --project=mobile-chromium",
+    "test:e2e:firefox": "playwright test --project=firefox",
+    "validate:skill": "bun scripts/validate-package.ts skill",
+    "validate:plugin": "bun scripts/validate-package.ts plugin",
+    "security:audit": "bun audit --audit-level=high",
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun run test:coverage && bun run build:check && bun run validate:skill && bun run validate:plugin",
+    "verify": "bun run check && bun run test:e2e"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.7.5",
@@ -36,6 +52,23 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "esbuild": "^0.28.2"
+    "@axe-core/playwright": "^4.10.2",
+    "@eslint/js": "^9.34.0",
+    "@happy-dom/global-registrator": "^20.0.8",
+    "@playwright/test": "^1.55.0",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.8.0",
+    "@types/bun": "^1.2.21",
+    "@types/node": "^22.0.0",
+    "@types/sanitize-html": "^2.16.0",
+    "@typescript-eslint/eslint-plugin": "^8.41.0",
+    "@typescript-eslint/parser": "^8.41.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.34.0",
+    "fast-check": "^4.3.0",
+    "happy-dom": "^20.0.8",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.41.0"
   }
 }

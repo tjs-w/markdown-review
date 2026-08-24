@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "rootDir": ".",
+    "outDir": "../.build/types/server",
+    "tsBuildInfoFile": "../.build/types/server.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [{ "path": "../packages/markdown-node" }, { "path": "../packages/mcp-server" }]
+}

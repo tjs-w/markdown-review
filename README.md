@@ -2,7 +2,7 @@
 
 Codex Markdown Review is a local Codex plugin for reviewing rendered Markdown without creating a second, editable copy of the document. Select a passage, queue line-anchored feedback, and submit the complete review to Codex in one batch. Codex then discusses the comments or edits the original `.md` file.
 
-> **Status:** early development. The plugin is designed for the Codex desktop experience and its plugin APIs may continue to evolve.
+> **Status:** early development. Codex App is the shipped interactive host; the reusable UI and MCP transport follow the MCP Apps standard so additional host adapters can be added without rewriting the review core.
 
 ## What it provides
 
@@ -38,12 +38,26 @@ The MCP server is intentionally narrow:
 
 This separation is the reason the project includes MCP: the server connects a Codex tool invocation to a trusted interactive component. A static HTML file by itself cannot receive the selected source file, return structured review comments to the active task, or maintain this context boundary.
 
+The implementation is split into host-neutral TypeScript workspaces. `contracts` validates every boundary, `core` owns pure review state, `markdown-node` reads and renders local files, and `review-ui` mounts against narrow document, submission, presentation, and state ports. `host-mcp-apps` supplies a standards-based runtime whose default submission is structured JSON; the Codex browser composition explicitly adds the concise `$markdown-review` formatter. Optional `window.openai` widget-state compatibility remains isolated. A future Tauri shell can reuse the contracts, core, and UI and supply Rust IPC ports; Tauri is not included today.
+
+## Host support
+
+| Host                               | Current status                                                       |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| Codex App                          | Shipped interactive MCP Apps UI and Codex submission adapter         |
+| Standards-compatible MCP Apps host | Adapter and protocol tested; host-specific acceptance still required |
+| Codex CLI / Claude Code            | Headless MCP tool compatibility; no embedded review UI               |
+| Claude Desktop / pi                | Architecture-ready, not yet accepted as shipped integrations         |
+| Tauri                              | Future shell seam only; no Tauri application is included             |
+
+Unshipped adapters and browser-acceptance follow-ups are tracked in [ROADMAP.md](./ROADMAP.md).
+
 ## Install from the repository marketplace
 
 Requirements:
 
 - Codex in the ChatGPT desktop app with plugin support.
-- Node.js 20 or newer available as `node`.
+- Node.js 22 or newer available as `node`.
 - The `codex` CLI for adding the marketplace source.
 
 Add this repository as a marketplace:
@@ -85,20 +99,20 @@ After a successful submission, the queue clears and the next review round begins
 ```sh
 git clone https://github.com/tjs-w/codex-markdown-review.git
 cd codex-markdown-review
-npm ci
-npm test
+bun install --frozen-lockfile
+bun run verify
 ```
 
-The repository checks in the built server and browser decoder because the plugin executes them directly. Rebuild after changing source code:
+Development and CI use the pinned Bun 1.4 toolchain. Installed plugins do not require Bun: the repository checks in a readable Node-compatible `server.cjs` plus minified browser bundles. Rebuild after changing TypeScript source:
 
 ```sh
-npm run build
+bun run build
 ```
 
 Run the browser harness against a Markdown file for UI work:
 
 ```sh
-npm run browser:harness -- /absolute/path/to/document.md
+bun run browser:harness -- /absolute/path/to/document.md
 ```
 
 Set `MARKDOWN_REVIEW_PREVIEW_COMPOSER=1` to open the feedback composer automatically in the harness.
@@ -120,23 +134,32 @@ Then restart the desktop app and install the plugin from the local marketplace s
 - The component resource declares no network or remote resource domains.
 - A Markdown file is limited to 2 MiB.
 - A review supports at most 8 PNGs, 5 MiB per image, and 12 MiB total, with decoded dimension and pixel limits.
+- Component access uses opaque, expiring review-session capabilities. Sessions slide for two hours and are bounded by a six-session LRU and a 72 MiB aggregate image cache.
+- Image bytes and SHA-256 digests are snapshotted into a session, so later file mutations cannot change an in-flight review.
 - Full document content and image chunks are placed in component-private metadata rather than model-visible structured output.
 
 Review only files you intend to expose to the local plugin process. Comments returned by the component are treated as quoted user feedback, not as instructions embedded in the reviewed document.
 
 ## Project layout
 
-| Path | Purpose |
-| --- | --- |
-| `.codex-plugin/plugin.json` | Plugin identity and install-surface metadata |
-| `.agents/plugins/marketplace.json` | Repository marketplace entry |
-| `.mcp.json` | Bundled local MCP server configuration |
-| `skills/markdown-review/` | Codex workflow and feedback-handling instructions |
-| `server/src/server.mjs` | Markdown rendering, validation, and MCP tools |
-| `server/dist/server.cjs` | Checked-in executable MCP server bundle |
-| `web/review.html` | Interactive review component |
-| `web/src/png-decoder.mjs` | Browser-side PNG decoder source |
-| `scripts/` | MCP, decoder, UI, and browser-harness tests |
+| Path                               | Purpose                                                        |
+| ---------------------------------- | -------------------------------------------------------------- |
+| `.codex-plugin/plugin.json`        | Plugin identity and install-surface metadata                   |
+| `.agents/plugins/marketplace.json` | Repository marketplace entry                                   |
+| `.mcp.json`                        | Bundled local MCP server configuration                         |
+| `skills/markdown-review/`          | Codex workflow and feedback-handling instructions              |
+| `packages/contracts/`              | Zod schemas and JSON-safe shared types                         |
+| `packages/core/`                   | Pure queue, reference, migration, and submission state         |
+| `packages/markdown-node/`          | Bounded local Markdown/image loading and rendering             |
+| `packages/review-ui/`              | Reusable DOM controller over host-neutral ports                |
+| `packages/host-mcp-apps/`          | Standard MCP Apps and optional Codex compatibility adapter     |
+| `packages/mcp-server/`             | MCP server factory, tools, and resource assembly               |
+| `server/src/main.ts`               | Node stdio composition root                                    |
+| `server/dist/server.cjs`           | Checked-in executable MCP server bundle                        |
+| `web/review.html`                  | Static accessible HTML/CSS shell with bundle injection markers |
+| `web/src/png-decoder.ts`           | Browser-side PNG decoder source                                |
+| `web/dist/review.js`               | Checked-in minified MCP Apps UI bundle                         |
+| `tests/` and package tests         | Unit, integration, adapter, and browser coverage               |
 
 ## Troubleshooting
 
@@ -144,7 +167,7 @@ Review only files you intend to expose to the local plugin process. Comments ret
 
 **Codex says a cached skill path moved.** Upgrade or reinstall the marketplace plugin, restart the app, and invoke the stable skill name `$markdown-review` in a new task. Do not depend on a versioned cache path.
 
-**The side panel is blank.** Run `npm test` in the plugin checkout, rebuild with `npm run build`, refresh the marketplace installation, and retry in a new task.
+**The side panel is blank.** Run `bun run verify` in the plugin checkout, rebuild with `bun run build`, refresh the marketplace installation, and retry in a new task.
 
 **A local image does not render.** Use a relative `.png` path located inside the Markdown file's directory and confirm it is within the documented size and dimension limits.
 

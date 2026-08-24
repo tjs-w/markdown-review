@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": [],
+    "rootDir": ".",
+    "outDir": "../../.build/types/contracts",
+    "tsBuildInfoFile": "../../.build/types/contracts.tsbuildinfo"
+  },
+  "include": ["src/index.ts"]
+}

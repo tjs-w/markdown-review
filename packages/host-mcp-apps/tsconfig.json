@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "rootDir": ".",
+    "outDir": "../../.build/types/host-mcp-apps",
+    "tsBuildInfoFile": "../../.build/types/host-mcp-apps.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [{ "path": "../contracts" }, { "path": "../core" }, { "path": "../review-ui" }]
+}

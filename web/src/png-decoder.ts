@@ -1,11 +1,24 @@
 import { decode } from "fast-png";
 
-function sampleAt(data, index, depth) {
+export interface DecodedPng {
+  readonly width: number;
+  readonly height: number;
+  readonly data: Uint8ClampedArray;
+}
+
+function sampleAt(
+  data: Uint8Array | Uint8ClampedArray | Uint16Array,
+  index: number,
+  depth: number,
+): number {
   const value = data[index];
+  if (value === undefined) {
+    throw new Error("PNG pixel data ended unexpectedly");
+  }
   return depth === 16 ? value >>> 8 : value;
 }
 
-export function decodePng(bytes) {
+export function decodePng(bytes: Uint8Array): DecodedPng {
   const decoded = decode(bytes);
   const { width, height, channels, depth, data } = decoded;
   const rgba = new Uint8ClampedArray(width * height * 4);
@@ -36,7 +49,7 @@ export function decodePng(bytes) {
       rgba[target + 2] = sampleAt(data, source + 2, depth);
       rgba[target + 3] = sampleAt(data, source + 3, depth);
     } else {
-      throw new Error(`Unsupported PNG channel count: ${channels}`);
+      throw new Error(`Unsupported PNG channel count: ${String(channels)}`);
     }
   }
 

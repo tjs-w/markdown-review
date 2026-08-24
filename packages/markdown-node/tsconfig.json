@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "lib": ["ES2022"],
+    "rootDir": ".",
+    "outDir": "../../.build/types/markdown-node",
+    "tsBuildInfoFile": "../../node_modules/.cache/markdown-node.tsbuildinfo",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [{ "path": "../contracts" }]
+}

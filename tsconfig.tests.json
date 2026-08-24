@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["bun", "node"],
+    "rootDir": ".",
+    "outDir": ".build/types/tests",
+    "tsBuildInfoFile": ".build/types/tests.tsbuildinfo"
+  },
+  "include": [
+    "packages/**/*.test.ts",
+    "packages/**/test/**/*.ts",
+    "scripts/check-coverage.ts",
+    "scripts/*.test.ts",
+    "tests/**/*.ts",
+    "web/src/png-decoder.ts",
+    "web/src/*.test.ts"
+  ],
+  "references": [
+    { "path": "./packages/contracts" },
+    { "path": "./packages/core" },
+    { "path": "./packages/markdown-node" },
+    { "path": "./packages/review-ui" },
+    { "path": "./packages/host-mcp-apps" },
+    { "path": "./packages/mcp-server" }
+  ]
+}

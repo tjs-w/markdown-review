@@ -4,12 +4,14 @@ Contributions to Codex Markdown Review should preserve one core invariant: the `
 
 ## Development workflow
 
-1. Use Node.js 20 or newer.
-2. Install dependencies with `npm ci`.
-3. Make source changes in `server/src/`, `web/`, `skills/`, or `scripts/`.
-4. Run `npm test`. Its pretest step rebuilds the checked-in bundles.
+1. Use Node.js 22 or newer and Bun 1.4.
+2. Install dependencies with `bun install --frozen-lockfile`.
+3. Make source changes in `packages/`, `server/src/`, `web/src/`, `skills/`, or `tests/`.
+4. Run `bun run verify`, then `bun run build` when checked-in artifacts changed.
 5. If UI behavior changed, run the browser harness and inspect keyboard, pointer, light-theme, and dark-theme behavior.
-6. Include updated `server/dist/server.cjs` or `web/dist/png-decoder.js` output when their source changes.
+6. Include updated `server/dist/server.cjs`, `web/dist/review.js`, and `web/dist/png-decoder.js` output when their source changes.
+
+Keep reusable packages host-neutral: `review-ui` must not import Node, MCP, Codex, or Tauri APIs. Host-specific behavior belongs in an adapter behind the documented ports. Validate data received across host, persisted-state, document, and image boundaries before use.
 
 ## Design constraints
 
