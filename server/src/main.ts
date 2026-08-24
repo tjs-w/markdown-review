@@ -9,7 +9,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 const pluginRoot = resolve(__dirname, "../..");
 const assetLoader = createFileReviewUiAssetLoader({
   templatePath: resolve(pluginRoot, "web/review.html"),
-  pngDecoderPath: resolve(pluginRoot, "web/dist/png-decoder.js"),
   reviewBundlePath: resolve(pluginRoot, "web/dist/review.js"),
 });
 const server = createMarkdownReviewServer({ assetLoader });

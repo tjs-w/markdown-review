@@ -260,6 +260,7 @@ describe("mountMarkdownReview", () => {
     await settle();
     await queueComment("Clarify this claim");
     expect(document.querySelector("[data-feedback-annotation]")?.textContent).toBe("1");
+    expect(document.querySelectorAll("mark.review-highlight")).toHaveLength(1);
     document.querySelector<HTMLButtonElement>("[data-feedback-annotation]")?.click();
     const field = document.getElementById("feedback") as HTMLTextAreaElement;
     field.value = "Clarify this claim precisely";
@@ -267,17 +268,22 @@ describe("mountMarkdownReview", () => {
     document.getElementById("add-queue")?.click();
     await settle();
     expect(harness.saves.at(-1)?.queue[0]?.feedback).toBe("Clarify this claim precisely");
+    expect(document.querySelectorAll("mark.review-highlight")).toHaveLength(1);
     await queueComment("Follow #1 but keep \\#2 literal", 1);
     expect(document.querySelectorAll("[data-feedback-annotation]")).toHaveLength(2);
+    expect(document.querySelectorAll("mark.review-highlight")).toHaveLength(2);
     document.querySelector<HTMLButtonElement>('.queued-card [data-queue-action="remove"]')?.click();
     expect(document.getElementById("toast-message")?.textContent).toContain("referenced by #2");
     document.getElementById("toast-action")?.click();
     await settle();
     expect(document.querySelectorAll("[data-feedback-annotation]")).toHaveLength(1);
+    expect(document.querySelectorAll("mark.review-highlight")).toHaveLength(1);
     document.getElementById("toast-action")?.click();
     await settle();
     expect(document.querySelectorAll("[data-feedback-annotation]")).toHaveLength(2);
+    expect(document.querySelectorAll("mark.review-highlight")).toHaveLength(2);
     handle.destroy();
+    expect(document.querySelector("mark.review-highlight")).toBeNull();
   });
 
   test("retains failed submissions and reuses their stable retry ID", async () => {
@@ -297,6 +303,7 @@ describe("mountMarkdownReview", () => {
     expect(harness.submissions).toHaveLength(2);
     expect(harness.submissions[1]?.submissionId).toBe(harness.submissions[0]?.submissionId);
     expect(document.querySelectorAll("[data-feedback-annotation]")).toHaveLength(0);
+    expect(document.querySelector("mark.review-highlight")).toBeNull();
     handle.destroy();
   });
 
@@ -384,6 +391,14 @@ describe("mountMarkdownReview", () => {
     });
     const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
     await settle();
+    expect(document.querySelector(".status-chip.warning")?.textContent).toBe("Source changed");
+    document.querySelector<HTMLButtonElement>("[data-feedback-annotation]")?.click();
+    const staleFeedback = document.getElementById("feedback") as HTMLTextAreaElement;
+    staleFeedback.value = "Reconsider this carefully";
+    staleFeedback.dispatchEvent(new Event("input", { bubbles: true }));
+    document.getElementById("add-queue")?.click();
+    await settle();
+    expect(harness.saves.at(-1)?.queue[0]?.revision).toBe("old-revision");
     expect(document.querySelector(".status-chip.warning")?.textContent).toBe("Source changed");
     selectText();
     document.getElementById("selection-action")?.click();
@@ -594,6 +609,26 @@ describe("mountMarkdownReview", () => {
     handle.destroy();
   });
 
+  test("rebuilds queued text highlights after refresh", async () => {
+    installShell();
+    const initialState = persisted([
+      queued({ id: "feedback-1", serial: 1, feedback: "Keep this highlighted" }),
+    ]);
+    const harness = createHarness({
+      initialState,
+      refresh: () => Promise.resolve({ ...reviewDocument, revision: "next" }),
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    expect(document.querySelector("mark.review-highlight")?.textContent).toBe("First paragraph");
+
+    document.getElementById("refresh")?.click();
+    await settle(5);
+    expect(document.getElementById("meta")?.textContent).toContain("rev next");
+    expect(document.querySelector("mark.review-highlight")?.textContent).toBe("First paragraph");
+    handle.destroy();
+  });
+
   test("shows image transport errors and permits retry", async () => {
     installShell();
     let loads = 0;
@@ -641,6 +676,67 @@ describe("mountMarkdownReview", () => {
     await settle(5);
     expect(loads).toBe(2);
     handle.destroy();
+  });
+
+  test("rejects unexpected image chunk offsets and lengths before decoding", async () => {
+    for (const mismatch of [
+      { byteOffset: 1, byteLength: 3 },
+      { byteOffset: 0, byteLength: 2 },
+    ]) {
+      installShell();
+      let decodes = 0;
+      const imageDocument: ReviewDocument = {
+        ...reviewDocument,
+        html: '<section class="review-block" data-start-line="1" data-end-line="1"><span class="local-image" data-local-image-id="local-image-1" data-alt="Diagram"></span></section>',
+        images: [
+          {
+            id: "local-image-1",
+            mimeType: "image/png",
+            revision: "0".repeat(64),
+            modifiedAt: NOW,
+            byteLength: 3,
+            chunkCount: 1,
+            width: 1,
+            height: 1,
+          },
+        ],
+      };
+      const harness = createHarness({
+        loadAssetChunk: () =>
+          Promise.resolve({
+            kind: "markdown-review-image-chunk",
+            reviewSessionId: SESSION,
+            revision: imageDocument.revision,
+            imageId: "local-image-1",
+            imageRevision: "0".repeat(64),
+            mimeType: "image/png",
+            chunkIndex: 0,
+            chunkCount: 1,
+            ...mismatch,
+            data: "AAAA",
+          }),
+      });
+      const handle = mountMarkdownReview({
+        ports: harness.ports,
+        initialDocument: imageDocument,
+        imageDecoder: {
+          decode() {
+            decodes += 1;
+            return Promise.resolve({
+              width: 1,
+              height: 1,
+              data: Uint8ClampedArray.from([1, 2, 3, 255]),
+            });
+          },
+        },
+      });
+      await settle(5);
+      expect(document.querySelector(".local-image-status")?.textContent).toContain(
+        "did not match the review",
+      );
+      expect(decodes).toBe(0);
+      handle.destroy();
+    }
   });
 
   test("does not automatically retry a permanent image transport failure", async () => {
@@ -728,9 +824,13 @@ describe("mountMarkdownReview", () => {
       ports: harness.ports,
       initialDocument: imageDocument,
       imageDecoder: {
-        decodePng() {
+        decode() {
           decodes += 1;
-          return { width: 1, height: 1, data: Uint8ClampedArray.from([1, 2, 3, 255]) };
+          return Promise.resolve({
+            width: 1,
+            height: 1,
+            data: Uint8ClampedArray.from([1, 2, 3, 255]),
+          });
         },
       },
     });
@@ -852,5 +952,80 @@ describe("mountMarkdownReview", () => {
     expect(document.getElementById("meta")?.textContent).toContain("rev refreshed");
     expect(document.querySelector(".image-retry")).toBeNull();
     handle.destroy();
+  });
+
+  test("does not mutate image placeholders when decoding finishes after destroy", async () => {
+    installShell();
+    const restoreCanvas = installCanvasContext();
+    const bytes = Uint8Array.from([1, 2, 3]);
+    const imageRevision = await sha256Hex(bytes);
+    let resolveDecode:
+      ((decoded: { width: number; height: number; data: Uint8ClampedArray }) => void) | undefined;
+    let decodes = 0;
+    const decodePromise = new Promise<{
+      width: number;
+      height: number;
+      data: Uint8ClampedArray;
+    }>((resolve) => {
+      resolveDecode = resolve;
+    });
+    const imageDocument: ReviewDocument = {
+      ...reviewDocument,
+      html: '<section class="review-block" data-start-line="1" data-end-line="1"><span class="local-image" data-local-image-id="local-image-1" data-alt="Diagram"></span></section>',
+      images: [
+        {
+          id: "local-image-1",
+          mimeType: "image/png",
+          revision: imageRevision,
+          modifiedAt: NOW,
+          byteLength: bytes.length,
+          chunkCount: 1,
+          width: 1,
+          height: 1,
+        },
+      ],
+    };
+    const harness = createHarness({
+      loadAssetChunk: () =>
+        Promise.resolve({
+          kind: "markdown-review-image-chunk",
+          reviewSessionId: SESSION,
+          revision: imageDocument.revision,
+          imageId: "local-image-1",
+          imageRevision,
+          mimeType: "image/png",
+          chunkIndex: 0,
+          chunkCount: 1,
+          byteOffset: 0,
+          byteLength: bytes.length,
+          data: Buffer.from(bytes).toString("base64"),
+        }),
+    });
+    const handle = mountMarkdownReview({
+      ports: harness.ports,
+      initialDocument: imageDocument,
+      imageDecoder: {
+        decode() {
+          decodes += 1;
+          return decodePromise;
+        },
+      },
+    });
+    await settle(5);
+    expect(decodes).toBe(1);
+    const placeholder = document.querySelector<HTMLElement>(".local-image");
+    if (!placeholder) throw new Error("Expected image placeholder");
+    handle.destroy();
+    const afterDestroy = placeholder.outerHTML;
+
+    resolveDecode?.({
+      width: 1,
+      height: 1,
+      data: Uint8ClampedArray.from([1, 2, 3, 255]),
+    });
+    await settle(5);
+    expect(placeholder.outerHTML).toBe(afterDestroy);
+    expect(document.querySelector("canvas.local-image-canvas")).toBeNull();
+    restoreCanvas();
   });
 });

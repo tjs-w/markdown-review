@@ -12,13 +12,13 @@ describe("coverage release gate", () => {
       "packages/contracts/src/index.ts",
       "packages/core/src/state.ts",
       "packages/review-ui/src/mount.ts",
-      "web/src/png-decoder.ts",
+      "packages/review-ui/src/review-highlights.ts",
     ]);
     const failures = evaluateLcov(
       passingRecord("packages/contracts/src/index.ts") +
         passingRecord("packages/core/src/state.ts") +
         passingRecord("packages/review-ui/src/mount.ts") +
-        passingRecord("/tmp/repo/web/src/png-decoder.ts"),
+        passingRecord("/tmp/repo/packages/review-ui/src/review-highlights.ts"),
       expected,
     );
     expect(failures).toEqual([]);

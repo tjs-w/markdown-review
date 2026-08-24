@@ -8,7 +8,6 @@
     { "path": "./packages/host-mcp-apps" },
     { "path": "./packages/mcp-server" },
     { "path": "./server" },
-    { "path": "./web" },
     { "path": "./scripts" },
     { "path": "./tsconfig.tests.json" },
     { "path": "./tsconfig.tools.json" }

@@ -30,17 +30,6 @@ const outputs = [
       minify: true,
     } satisfies BuildOptions,
   },
-  {
-    source: resolve(root, "web/src/png-decoder.ts"),
-    destination: "web/dist/png-decoder.js",
-    options: {
-      platform: "browser",
-      format: "iife",
-      globalName: "MarkdownReviewPng",
-      target: "es2022",
-      minify: true,
-    } satisfies BuildOptions,
-  },
 ] as const;
 
 async function compile(): Promise<void> {
@@ -74,7 +63,6 @@ async function assertBudgets(): Promise<void> {
   const browserBytes = await Promise.all([
     stat(resolve(root, "web/review.html")),
     stat(resolve(temporaryRoot, "web/dist/review.js")),
-    stat(resolve(temporaryRoot, "web/dist/png-decoder.js")),
   ]).then((values) => values.reduce((total, value) => total + value.size, 0));
 
   if (serverBytes > 2.5 * 1024 * 1024) {

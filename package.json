@@ -35,8 +35,8 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "typecheck": "tsc -b",
-    "test": "bun test packages web/src/*.test.ts tests/integration tests/property scripts/*.test.ts",
-    "test:coverage": "bun test --coverage packages web/src/*.test.ts tests/integration tests/property scripts/*.test.ts && bun scripts/check-coverage.ts",
+    "test": "bun test packages tests/integration tests/property scripts/*.test.ts",
+    "test:coverage": "bun test --coverage packages tests/integration tests/property scripts/*.test.ts && bun scripts/check-coverage.ts",
     "test:e2e": "playwright test --project=chromium --project=webkit --project=mobile-chromium",
     "test:e2e:firefox": "playwright test --project=firefox",
     "validate:skill": "bun scripts/validate-package.ts skill",
@@ -48,7 +48,6 @@
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.7.5",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "fast-png": "^8.0.0",
     "marked": "^18.0.10",
     "sanitize-html": "^2.17.7",
     "zod": "^4.4.3"

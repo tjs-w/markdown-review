@@ -88,9 +88,7 @@ describe("createMarkdownReviewServer", () => {
       assetLoader: {
         load() {
           return Promise.resolve({
-            template:
-              "<html><!-- MARKDOWN_REVIEW_PNG_DECODER --><!-- MARKDOWN_REVIEW_APP --></html>",
-            pngDecoder: "window.decoder = true; // </script",
+            template: "<html><!-- MARKDOWN_REVIEW_APP --></html>",
             reviewBundle: "window.review = '$&'; // </script",
           });
         },
@@ -138,9 +136,7 @@ describe("createMarkdownReviewServer", () => {
       const resource = await client.readResource({ uri: MARKDOWN_REVIEW_TEMPLATE_URI });
       const resourceContent = resource.contents[0];
       const html = resourceContent && "text" in resourceContent ? resourceContent.text : "";
-      expect(html).toContain("window.decoder = true");
       expect(html).toContain("window.review = '$&'");
-      expect(html).not.toContain("MARKDOWN_REVIEW_PNG_DECODER");
       expect(html).not.toContain("MARKDOWN_REVIEW_APP");
       expect(html).toContain("<\\/script");
     } finally {
@@ -168,9 +164,7 @@ describe("createMarkdownReviewServer", () => {
       assetLoader: {
         load() {
           return Promise.resolve({
-            template:
-              "<html><!-- MARKDOWN_REVIEW_PNG_DECODER --><!-- MARKDOWN_REVIEW_APP --></html>",
-            pngDecoder: "window.decoder = true;",
+            template: "<html><!-- MARKDOWN_REVIEW_APP --></html>",
             reviewBundle: "window.review = true;",
           });
         },
@@ -234,24 +228,18 @@ describe("createMarkdownReviewServer", () => {
 });
 
 describe("file UI asset loader", () => {
-  test("loads the three module-relative shipping assets", async () => {
+  test("loads the two module-relative shipping assets", async () => {
     const directory = await mkdtemp(join(tmpdir(), "markdown-review-assets-"));
     temporaryDirectories.push(directory);
     const templatePath = join(directory, "review.html");
-    const pngDecoderPath = join(directory, "png-decoder.js");
     const reviewBundlePath = join(directory, "review.js");
-    await Promise.all([
-      writeFile(templatePath, "template"),
-      writeFile(pngDecoderPath, "decoder"),
-      writeFile(reviewBundlePath, "review"),
-    ]);
+    await Promise.all([writeFile(templatePath, "template"), writeFile(reviewBundlePath, "review")]);
 
     expect(
       await createFileReviewUiAssetLoader({
         templatePath,
-        pngDecoderPath,
         reviewBundlePath,
       }).load(),
-    ).toEqual({ template: "template", pngDecoder: "decoder", reviewBundle: "review" });
+    ).toEqual({ template: "template", reviewBundle: "review" });
   });
 });

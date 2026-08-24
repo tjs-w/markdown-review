@@ -19,8 +19,7 @@ import { z } from "zod";
 
 import type { ReviewUiAssetLoader } from "./assets.js";
 
-export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v18.html";
-const PNG_DECODER_MARKER = "<!-- MARKDOWN_REVIEW_PNG_DECODER -->";
+export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v19.html";
 const REVIEW_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
 
 const SERVER_INSTRUCTIONS =
@@ -101,18 +100,11 @@ export function createMarkdownReviewServer(options: CreateMarkdownReviewServerOp
       },
     },
     async () => {
-      const { template, pngDecoder, reviewBundle } = await options.assetLoader.load();
-      if (!template.includes(PNG_DECODER_MARKER)) {
-        throw new Error("The Markdown Review template is missing its PNG decoder marker.");
-      }
+      const { template, reviewBundle } = await options.assetLoader.load();
       if (!template.includes(REVIEW_BUNDLE_MARKER)) {
         throw new Error("The Markdown Review template is missing its application bundle marker.");
       }
-      const withPngDecoder = template.replace(
-        PNG_DECODER_MARKER,
-        () => `<script>${pngDecoder.replaceAll("</script", "<\\/script")}</script>`,
-      );
-      const html = withPngDecoder.replace(
+      const html = template.replace(
         REVIEW_BUNDLE_MARKER,
         () => `<script>${reviewBundle.replaceAll("</script", "<\\/script")}</script>`,
       );

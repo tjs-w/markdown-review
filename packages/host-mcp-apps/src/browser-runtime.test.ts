@@ -4,6 +4,7 @@ import type {
   MarkdownReviewHandle,
   MarkdownReviewPorts,
   MountMarkdownReviewOptions,
+  ReviewImageDecoder,
 } from "@markdown-review/review-ui";
 
 import { startMarkdownReviewRuntime } from "./browser-runtime";
@@ -26,18 +27,9 @@ const documentFixture = {
 
 describe("browser composition runtime", () => {
   test("surfaces errors, retries, hydrates, decodes, tears down, and closes", async () => {
-    const hostWindow = window as Window &
-      typeof globalThis & {
-        MarkdownReviewPng?: {
-          decodePng(bytes: Uint8Array): {
-            width: number;
-            height: number;
-            data: Uint8ClampedArray;
-          };
-        };
-      };
-    hostWindow.MarkdownReviewPng = {
-      decodePng: () => ({ width: 1, height: 1, data: new Uint8ClampedArray(4) }),
+    const hostWindow = window;
+    const imageDecoder: ReviewImageDecoder = {
+      decode: () => Promise.resolve({ width: 1, height: 1, data: new Uint8ClampedArray(4) }),
     };
     let hostOptions: McpAppsHostOptions | undefined;
     let connectCount = 0;
@@ -83,7 +75,12 @@ describe("browser composition runtime", () => {
     const originalConsoleError = console.error;
     console.error = consoleError;
     try {
-      const runtime = startMarkdownReviewRuntime({ hostWindow, createHost, mount });
+      const runtime = startMarkdownReviewRuntime({
+        hostWindow,
+        createHost,
+        imageDecoder,
+        mount,
+      });
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       expect(shownErrors[0]?.error).toEqual(new Error("connect failed"));
       shownErrors[0]?.retry?.();
@@ -93,7 +90,9 @@ describe("browser composition runtime", () => {
       expect(opened).toEqual([documentFixture]);
       expect(mountOptions?.ports).toBe(ports);
       expect(hostOptions?.submissionFormatter).toBeUndefined();
-      expect(mountOptions?.imageDecoder?.decodePng(new Uint8Array()).width).toBe(1);
+      expect((await mountOptions?.imageDecoder?.decode(new Uint8Array(), "image/png"))?.width).toBe(
+        1,
+      );
       hostOptions?.onError?.(new Error("host failed"));
       expect(shownErrors.at(-1)?.error).toEqual(new Error("host failed"));
       hostOptions?.onTeardown?.();
@@ -106,7 +105,6 @@ describe("browser composition runtime", () => {
       expect(closeCount).toBe(1);
     } finally {
       console.error = originalConsoleError;
-      delete hostWindow.MarkdownReviewPng;
     }
   });
 });

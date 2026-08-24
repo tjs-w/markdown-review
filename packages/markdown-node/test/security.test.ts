@@ -2,8 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { crc32, deflateSync } from "node:zlib";
-import { encode } from "fast-png";
+import { crc32 } from "node:zlib";
 
 import {
   DefaultMarkdownPathPolicy,
@@ -12,15 +11,89 @@ import {
   MAX_INLINE_IMAGE_REFERENCES,
   MAX_MARKDOWN_BYTES,
   MarkdownReviewService,
+  inspectLocalImage,
   readFileHandleBounded,
   readPngDimensions,
-  validatePng,
 } from "../src/index.js";
 
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
 );
+
+function jpegSegment(marker: number, data: Buffer): Buffer {
+  const segment = Buffer.allocUnsafe(data.length + 4);
+  segment[0] = 0xff;
+  segment[1] = marker;
+  segment.writeUInt16BE(data.length + 2, 2);
+  data.copy(segment, 4);
+  return segment;
+}
+
+function jpegFixture(width = 1, height = 1, frameMarker = 0xc0): Buffer {
+  const frame = Buffer.from([
+    8,
+    (height >>> 8) & 0xff,
+    height & 0xff,
+    (width >>> 8) & 0xff,
+    width & 0xff,
+    1,
+    1,
+    0x11,
+    0,
+  ]);
+  const scan = Buffer.from([1, 1, 0, 0, 63, 0]);
+  return Buffer.concat([
+    Buffer.from([0xff, 0xd8]),
+    jpegSegment(frameMarker, frame),
+    jpegSegment(0xda, scan),
+    Buffer.from([0, 0xff, 0xd9]),
+  ]);
+}
+
+function webpChunk(type: string, data: Buffer): Buffer {
+  const header = Buffer.alloc(8);
+  header.write(type, 0, 4, "ascii");
+  header.writeUInt32LE(data.length, 4);
+  return Buffer.concat([header, data, data.length % 2 === 0 ? Buffer.alloc(0) : Buffer.alloc(1)]);
+}
+
+function webpFixture(width = 1, height = 1): Buffer {
+  const bits = ((width - 1) | ((height - 1) << 14)) >>> 0;
+  const frame = Buffer.alloc(5);
+  frame[0] = 0x2f;
+  frame.writeUInt32LE(bits, 1);
+  const chunks = webpChunk("VP8L", frame);
+  const header = Buffer.alloc(12);
+  header.write("RIFF", 0, 4, "ascii");
+  header.writeUInt32LE(chunks.length + 4, 4);
+  header.write("WEBP", 8, 4, "ascii");
+  return Buffer.concat([header, chunks]);
+}
+
+function extendedWebpFixture(width = 1, height = 1): Buffer {
+  const extended = Buffer.alloc(10);
+  extended.writeUIntLE(width - 1, 4, 3);
+  extended.writeUIntLE(height - 1, 7, 3);
+  const primary = webpFixture(width, height).subarray(12);
+  const chunks = Buffer.concat([webpChunk("VP8X", extended), primary]);
+  const header = Buffer.alloc(12);
+  header.write("RIFF", 0, 4, "ascii");
+  header.writeUInt32LE(chunks.length + 4, 4);
+  header.write("WEBP", 8, 4, "ascii");
+  return Buffer.concat([header, chunks]);
+}
+
+function animatedWebpFixture(): Buffer {
+  const extended = Buffer.alloc(10);
+  extended[0] = 0x02;
+  const chunks = Buffer.concat([webpChunk("VP8X", extended), webpChunk("ANIM", Buffer.alloc(6))]);
+  const header = Buffer.alloc(12);
+  header.write("RIFF", 0, 4, "ascii");
+  header.writeUInt32LE(chunks.length + 4, 4);
+  header.write("WEBP", 8, 4, "ascii");
+  return Buffer.concat([header, chunks]);
+}
 const temporaryDirectories: string[] = [];
 
 function pngChunk(type: string, data: Buffer): Buffer {
@@ -39,18 +112,6 @@ function insertAfterIhdr(png: Buffer, type: string, data: Buffer): Buffer {
 
 function insertChunksAfterIhdr(png: Buffer, chunks: readonly Buffer[]): Buffer {
   return Buffer.concat([png.subarray(0, 33), ...chunks, png.subarray(33)]);
-}
-
-function replaceIdat(png: Buffer, data: Buffer): Buffer {
-  const typeOffset = png.indexOf(Buffer.from("IDAT", "ascii"));
-  if (typeOffset < 4) throw new Error("Expected an IDAT chunk");
-  const chunkOffset = typeOffset - 4;
-  const nextOffset = typeOffset + 4 + png.readUInt32BE(chunkOffset) + 4;
-  return Buffer.concat([
-    png.subarray(0, chunkOffset),
-    pngChunk("IDAT", data),
-    png.subarray(nextOffset),
-  ]);
 }
 
 afterEach(async () => {
@@ -72,15 +133,6 @@ async function rejectionMessage(operation: () => Promise<unknown>): Promise<stri
     return error instanceof Error ? error.message : String(error);
   }
   throw new Error("Expected the operation to reject");
-}
-
-function failureMessage(operation: () => void): string {
-  try {
-    operation();
-  } catch (error: unknown) {
-    return error instanceof Error ? error.message : String(error);
-  }
-  throw new Error("Expected the operation to fail");
 }
 
 describe("filesystem and image trust boundaries", () => {
@@ -106,7 +158,7 @@ describe("filesystem and image trust boundaries", () => {
     );
   });
 
-  test("denies traversal, encoded traversal, remote, absolute, non-PNG, and symlink escapes", async () => {
+  test("allows supported extensions and denies traversal, remote, executable, and symlink escapes", async () => {
     const root = await temporaryDirectory();
     const documentDirectory = join(root, "document");
     await mkdir(documentDirectory);
@@ -114,16 +166,31 @@ describe("filesystem and image trust boundaries", () => {
     const outsidePng = join(root, "outside.png");
     const text = join(documentDirectory, "image.txt");
     const localPng = join(documentDirectory, "local.png");
+    const localJpeg = join(documentDirectory, "local.JPEG");
+    const localWebp = join(documentDirectory, "local.webp");
     const escape = join(documentDirectory, "escape.png");
     await writeFile(markdown, "# Review\n");
     await writeFile(outsidePng, ONE_PIXEL_PNG);
     await writeFile(localPng, ONE_PIXEL_PNG);
+    await writeFile(localJpeg, jpegFixture());
+    await writeFile(localWebp, webpFixture());
     await writeFile(text, "not png");
+    await Promise.all(
+      ["image.gif", "image.svg", "image.avif"].map((name) =>
+        writeFile(join(documentDirectory, name), "unsupported image"),
+      ),
+    );
     await symlink(outsidePng, escape);
     const policy = new DefaultMarkdownPathPolicy();
 
     expect(await policy.resolveLocalImagePath(markdown, "local.png")).toBe(
       await realpath(localPng),
+    );
+    expect(await policy.resolveLocalImagePath(markdown, "local.JPEG")).toBe(
+      await realpath(localJpeg),
+    );
+    expect(await policy.resolveLocalImagePath(markdown, "local.webp")).toBe(
+      await realpath(localWebp),
     );
     for (const source of [
       "../outside.png",
@@ -132,12 +199,18 @@ describe("filesystem and image trust boundaries", () => {
       "//example.com/image.png",
       outsidePng,
       "image.txt",
+      "image.gif",
+      "image.svg",
+      "image.avif",
       "escape.png",
     ]) {
       expect(await rejectionMessage(() => policy.resolveLocalImagePath(markdown, source))).not.toBe(
         "",
       );
     }
+    expect(
+      await rejectionMessage(() => policy.resolveLocalImagePath(markdown, "image.svg")),
+    ).toMatch(/PNG, JPEG, or WebP/);
   });
 
   test("bounds reads and rejects nonregular files", async () => {
@@ -163,55 +236,80 @@ describe("filesystem and image trust boundaries", () => {
     const lastByte = corrupted[corrupted.length - 1];
     if (lastByte === undefined) throw new Error("Expected a non-empty PNG fixture");
     corrupted[corrupted.length - 1] = lastByte ^ 1;
-    expect(
-      failureMessage(() => {
-        validatePng(corrupted, readPngDimensions(corrupted));
-      }),
-    ).toMatch(/complete valid PNG/);
+    expect(() => readPngDimensions(corrupted)).toThrow(/invalid checksum/);
   });
 
-  test("rejects unsafe PNG profiles, animation, palettes, inflation, and sample depths", () => {
-    const profileBomb = insertAfterIhdr(
-      ONE_PIXEL_PNG,
-      "iCCP",
-      Buffer.concat([
-        Buffer.from("profile\0", "latin1"),
-        Buffer.from([0]),
-        deflateSync(Buffer.alloc(1024 * 1024)),
-      ]),
-    );
-    expect(() => readPngDimensions(profileBomb)).toThrow(/color profiles/);
-
+  test("rejects animated PNG without raster-decoding static image data in Node", () => {
     const animated = insertAfterIhdr(ONE_PIXEL_PNG, "acTL", Buffer.alloc(8));
-    expect(() => readPngDimensions(animated)).toThrow(/Animated PNG/);
+    expect(() => readPngDimensions(animated)).toThrow(/animated PNG/);
+  });
 
-    const indexed = Buffer.from(ONE_PIXEL_PNG);
-    indexed[25] = 3;
-    const paletteBomb = insertAfterIhdr(indexed, "PLTE", Buffer.alloc(30_000));
-    expect(() => readPngDimensions(paletteBomb)).toThrow(/1 to 256 RGB entries/);
+  test("identifies bounded JPEG and static WebP containers with extension agreement", () => {
+    expect(inspectLocalImage(jpegFixture(2, 3), "fixture.jpg")).toEqual({
+      mimeType: "image/jpeg",
+      width: 2,
+      height: 3,
+      pixels: 6,
+    });
+    expect(inspectLocalImage(jpegFixture(), "fixture.JPEG").mimeType).toBe("image/jpeg");
+    expect(inspectLocalImage(jpegFixture(3, 2, 0xc2), "progressive.jpeg")).toMatchObject({
+      mimeType: "image/jpeg",
+      width: 3,
+      height: 2,
+    });
+    expect(inspectLocalImage(webpFixture(4, 5), "fixture.webp")).toEqual({
+      mimeType: "image/webp",
+      width: 4,
+      height: 5,
+      pixels: 20,
+    });
+    expect(inspectLocalImage(extendedWebpFixture(5, 4), "extended.webp")).toEqual({
+      mimeType: "image/webp",
+      width: 5,
+      height: 4,
+      pixels: 20,
+    });
 
-    const grayscale = Buffer.from(
-      encode({ width: 1, height: 1, channels: 1, data: Uint8Array.from([42]) }),
+    expect(() => inspectLocalImage(ONE_PIXEL_PNG, "fixture.jpg")).toThrow(/does not match/);
+    expect(() => inspectLocalImage(jpegFixture(), "fixture.webp")).toThrow(/does not match/);
+    expect(() => inspectLocalImage(Buffer.from("GIF89a"), "fixture.png")).toThrow(/does not match/);
+  });
+
+  test("rejects animated, malformed, oversized, and pathologically segmented containers", () => {
+    expect(() => inspectLocalImage(animatedWebpFixture(), "animated.webp")).toThrow(
+      /animated WebP/,
     );
-    const colorKeyTransparency = insertAfterIhdr(grayscale, "tRNS", Buffer.from([0, 42]));
-    expect(() => readPngDimensions(colorKeyTransparency)).toThrow(/color-key transparency/);
-
-    const imageDataBomb = replaceIdat(ONE_PIXEL_PNG, deflateSync(Buffer.alloc(1024 * 1024)));
-    const bombDimensions = readPngDimensions(imageDataBomb);
-    expect(() => {
-      validatePng(imageDataBomb, bombDimensions);
-    }).toThrow(/decoded-size limit/);
-
-    const sixteenBit = Buffer.from(
-      encode({
-        width: 1,
-        height: 1,
-        channels: 4,
-        depth: 16,
-        data: Uint16Array.from([1, 2, 3, 4]),
-      }),
+    expect(() => inspectLocalImage(jpegFixture().subarray(0, -2), "truncated.jpg")).toThrow(
+      /end marker/,
     );
-    expect(() => readPngDimensions(sixteenBit)).toThrow(/8-bit PNG samples/);
+    expect(() => inspectLocalImage(webpFixture(MAX_IMAGE_DIMENSION + 1, 1), "huge.webp")).toThrow(
+      /dimensions exceed/,
+    );
+
+    const jpegMarkerStorm = Buffer.concat([
+      Buffer.from([0xff, 0xd8]),
+      ...Array.from({ length: 4097 }, () => Buffer.from([0xff, 0x01])),
+      jpegFixture().subarray(2),
+    ]);
+    expect(() => inspectLocalImage(jpegMarkerStorm, "storm.jpg")).toThrow(/more than 4096/);
+
+    const junkChunks = Buffer.concat(
+      Array.from({ length: 1025 }, () => webpChunk("JUNK", Buffer.alloc(0))),
+    );
+    const webpHeader = Buffer.alloc(12);
+    webpHeader.write("RIFF", 0, 4, "ascii");
+    webpHeader.writeUInt32LE(junkChunks.length + 4, 4);
+    webpHeader.write("WEBP", 8, 4, "ascii");
+    expect(() => inspectLocalImage(Buffer.concat([webpHeader, junkChunks]), "storm.webp")).toThrow(
+      /more than 1024/,
+    );
+  });
+
+  test("accepts the pixel boundary and rejects one pixel-budget step beyond it", () => {
+    expect(inspectLocalImage(jpegFixture(4000, 4000), "boundary.jpg").pixels).toBe(16_000_000);
+    expect(() => inspectLocalImage(jpegFixture(4001, 4000), "over.jpg")).toThrow(
+      /dimensions exceed/,
+    );
   });
 
   test("bounds PNG structural work and requires consecutive image-data chunks", () => {
@@ -259,6 +357,7 @@ describe("filesystem and image trust boundaries", () => {
     await writeFile(oversized, Buffer.alloc(MAX_INLINE_IMAGE_BYTES + 1));
     const hugeHeader = Buffer.from(ONE_PIXEL_PNG);
     hugeHeader.writeUInt32BE(MAX_IMAGE_DIMENSION + 1, 16);
+    hugeHeader.writeUInt32BE(crc32(hugeHeader.subarray(12, 29)), 29);
     await writeFile(hugeDimensions, hugeHeader);
     await writeFile(
       markdown,
@@ -294,6 +393,50 @@ describe("filesystem and image trust boundaries", () => {
     expect(opened.document.html).toContain(
       `processes up to ${MAX_INLINE_IMAGE_REFERENCES} local image references`,
     );
+  });
+
+  test("deduplicates byte-identical snapshots across paths and preserves detected MIME types", async () => {
+    const directory = await temporaryDirectory();
+    const markdown = join(directory, "review.md");
+    const jpeg = jpegFixture(2, 3);
+    await Promise.all([
+      writeFile(join(directory, "first.jpg"), jpeg),
+      writeFile(join(directory, "copy.jpeg"), jpeg),
+      writeFile(join(directory, "static.webp"), webpFixture(4, 5)),
+      writeFile(join(directory, "pixel.png"), ONE_PIXEL_PNG),
+      writeFile(join(directory, "disguised.jpg"), ONE_PIXEL_PNG),
+    ]);
+    await writeFile(
+      markdown,
+      [
+        "# Review",
+        "![First](first.jpg)",
+        "![Copy](copy.jpeg)",
+        "![WebP](static.webp)",
+        "![PNG](pixel.png)",
+        "![Mismatch](disguised.jpg)",
+      ].join("\n\n"),
+    );
+
+    const service = new MarkdownReviewService();
+    const opened = await service.open(markdown);
+    expect(opened.document.images.map((image) => image.mimeType)).toEqual([
+      "image/jpeg",
+      "image/webp",
+      "image/png",
+    ]);
+    for (const image of opened.document.images) {
+      const chunk = service.loadAssetChunk({
+        reviewSessionId: opened.document.reviewSessionId,
+        revision: opened.document.revision,
+        imageId: image.id,
+        chunkIndex: 0,
+      });
+      expect(chunk.summary.mimeType).toBe(image.mimeType);
+      expect(chunk.privateChunk.mimeType).toBe(image.mimeType);
+    }
+    expect(opened.document.html.match(/data-local-image-id="local-image-1"/g)).toHaveLength(2);
+    expect(opened.document.html).toContain("extension does not match");
   });
 
   test("counts invalid image tags against the local reference work budget", async () => {

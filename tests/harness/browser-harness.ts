@@ -29,8 +29,19 @@ if (process.argv[2] === "--generated-fixture") {
     ),
   );
   await writeFile(
+    join(generatedDirectory, "fixture.jpg"),
+    Buffer.from(
+      "/9j/4AAQSkZJRgABAgAAAQABAAD//gAQTGF2YzYyLjI4LjEwMgD/2wBDAAgEBAQEBAUFBQUFBQYGBgYGBgYGBgYGBgYHBwcICAgHBwcGBgcHCAgICAkJCQgICAgJCQoKCgwMCwsODg4RERT/xABLAAEBAAAAAAAAAAAAAAAAAAAABwEBAAAAAAAAAAAAAAAAAAAAABABAAAAAAAAAAAAAAAAAAAAABEBAAAAAAAAAAAAAAAAAAAAAP/AABEIAAIAAgMBIgACEQADEQD/2gAMAwEAAhEDEQA/AL+AD//Z",
+      "base64",
+    ),
+  );
+  await writeFile(
+    join(generatedDirectory, "fixture.webp"),
+    Buffer.from("UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA", "base64"),
+  );
+  await writeFile(
     markdownPath,
-    "# Markdown Review Fixture\n\nSelect and review this paragraph.\n\n## Image\n\n![Pixel](fixture.png)\n",
+    "# Markdown Review Fixture\n\nSelect and review this paragraph.\n\n## Images\n\n![PNG pixel](fixture.png)\n\n![JPEG pixel](fixture.jpg)\n\n![WebP pixel](fixture.webp)\n",
   );
 } else {
   markdownPath = resolve(process.argv[2] ?? resolve(pluginRoot, "scripts/fixture.md"));
@@ -45,7 +56,7 @@ const transport = new StdioClientTransport({
 const client = new Client({ name: "markdown-review-browser-harness", version: "0.1.0" });
 await client.connect(transport);
 
-const resource = await client.readResource({ uri: "ui://markdown-review/v18.html" });
+const resource = await client.readResource({ uri: "ui://markdown-review/v19.html" });
 const resourceContent = resource.contents[0];
 if (!resourceContent || !("text" in resourceContent)) {
   throw new Error("The Markdown Review HTML resource was not returned");
@@ -98,12 +109,14 @@ const hostScript = `<script>
     externalLinks: [],
     toolCalls: [],
     toolResults: [],
-    widgetState: seededWidgetState
+    widgetState: seededWidgetState,
+    setWidgetStateCalls: 0
   };
   if (query.get("codex") === "1") {
     window.openai = {
       widgetState: seededWidgetState,
       setWidgetState(nextState) {
+        state.setWidgetStateCalls += 1;
         this.widgetState = nextState;
         state.widgetState = nextState;
       }

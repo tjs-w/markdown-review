@@ -55,7 +55,6 @@ async function validatePlugin(): Promise<void> {
     access(resolve(root, "server/dist/server.cjs")),
     access(resolve(root, "web/review.html")),
     access(resolve(root, "web/dist/review.js")),
-    access(resolve(root, "web/dist/png-decoder.js")),
   ]);
 }
 

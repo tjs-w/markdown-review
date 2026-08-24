@@ -1,21 +1,13 @@
 import { z } from "zod";
 
-import { MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from "./png-safety.js";
-
-export {
-  inspectPngSafety,
-  MAX_IMAGE_DECODED_BYTES,
-  MAX_IMAGE_DIMENSION,
-  MAX_IMAGE_PIXELS,
-  validatePngSafety,
-  type PngSafetyInfo,
-} from "./png-safety.js";
-
 export const MAX_QUEUE_ITEMS = 20;
+export const MAX_IMAGE_DIMENSION = 8192;
+export const MAX_IMAGE_PIXELS = 16_000_000;
 export const MAX_PATH_LENGTH = 4096;
 export const MAX_QUEUE_ID_LENGTH = 120;
 export const MAX_REVISION_LENGTH = 128;
 export const MAX_QUOTE_LENGTH = 1400;
+export const MAX_TEXT_ANCHOR_CONTEXT_LENGTH = 64;
 export const MAX_FEEDBACK_LENGTH = 2400;
 export const MAX_DOCUMENT_TITLE_LENGTH = 256;
 export const MAX_RENDERED_HTML_LENGTH = 16 * 1024 * 1024;
@@ -34,6 +26,22 @@ const PathSchema = z.string().min(1).max(MAX_PATH_LENGTH);
 const RevisionSchema = z.string().max(MAX_REVISION_LENGTH);
 const TimestampSchema = z.string().min(1).max(128);
 const CommentReferenceSchema = z.string().regex(/^#[1-9]\d*$/);
+
+export const ReviewImageMimeTypeSchema = z.enum(["image/png", "image/jpeg", "image/webp"]);
+
+export const ReviewTextAnchorSchema = z
+  .object({
+    version: z.literal(1),
+    start: NonNegativeSafeIntegerSchema.max(MAX_RENDERED_HTML_LENGTH),
+    end: NonNegativeSafeIntegerSchema.max(MAX_RENDERED_HTML_LENGTH),
+    prefix: z.string().max(MAX_TEXT_ANCHOR_CONTEXT_LENGTH),
+    suffix: z.string().max(MAX_TEXT_ANCHOR_CONTEXT_LENGTH),
+  })
+  .strict()
+  .refine((anchor) => anchor.end > anchor.start, {
+    message: "end must be greater than start",
+    path: ["end"],
+  });
 
 export const ReviewDocumentIdentitySchema = z
   .object({
@@ -54,7 +62,7 @@ export const ReviewDocumentSummarySchema = ReviewDocumentIdentitySchema.extend({
 export const ReviewImageDescriptorSchema = z
   .object({
     id: z.string().min(1).max(128),
-    mimeType: z.literal("image/png"),
+    mimeType: ReviewImageMimeTypeSchema,
     revision: z.string().min(1).max(MAX_REVISION_LENGTH),
     modifiedAt: TimestampSchema,
     byteLength: PositiveSafeIntegerSchema.max(MAX_INLINE_IMAGE_BYTES),
@@ -65,6 +73,10 @@ export const ReviewImageDescriptorSchema = z
   .strict()
   .refine((image) => image.width * image.height <= MAX_IMAGE_PIXELS, {
     message: "The decoded image exceeds the pixel limit",
+  })
+  .refine((image) => image.chunkCount === Math.ceil(image.byteLength / IMAGE_CHUNK_BYTES), {
+    message: "The chunk count must match the encoded image length",
+    path: ["chunkCount"],
   });
 
 export const ReviewDocumentSchema = ReviewDocumentSummarySchema.extend({
@@ -124,7 +136,7 @@ export const ReviewImageChunkSummarySchema = z
     revision: z.string().min(1).max(MAX_REVISION_LENGTH),
     imageId: z.string().min(1).max(128),
     imageRevision: z.string().min(1).max(MAX_REVISION_LENGTH),
-    mimeType: z.literal("image/png"),
+    mimeType: ReviewImageMimeTypeSchema,
     chunkIndex: NonNegativeSafeIntegerSchema,
     chunkCount: PositiveSafeIntegerSchema,
     byteOffset: NonNegativeSafeIntegerSchema.max(MAX_INLINE_IMAGE_BYTES),
@@ -140,7 +152,7 @@ export const PrivateReviewImageChunkSchema = ReviewImageChunkSummarySchema.exten
     .regex(/^[A-Za-z0-9+/]*={0,2}$/),
 }).strict();
 
-// Host-neutral aliases use "asset" while the current transport remains PNG-only.
+// Host-neutral aliases use "asset" because the transport supports multiple raster formats.
 export const AssetChunkRequestSchema = ReviewImageChunkRequestSchema;
 export const AssetChunkSummarySchema = ReviewImageChunkSummarySchema;
 export const PrivateAssetChunkSchema = PrivateReviewImageChunkSchema;
@@ -152,6 +164,7 @@ export const ReviewSelectionSchema = z
     anchorX: z.number().min(0).max(1),
     anchorY: z.number().min(0).max(1),
     quote: z.string().max(MAX_QUOTE_LENGTH),
+    textAnchor: ReviewTextAnchorSchema.optional(),
   })
   .strict()
   .refine((selection) => selection.endLine >= selection.startLine, {
@@ -256,6 +269,8 @@ export const PersistedReviewStateSchema = z
 export type ReviewDocumentIdentity = z.infer<typeof ReviewDocumentIdentitySchema>;
 export type ReviewDocumentSummary = z.infer<typeof ReviewDocumentSummarySchema>;
 export type ReviewImageDescriptor = z.infer<typeof ReviewImageDescriptorSchema>;
+export type ReviewImageMimeType = z.infer<typeof ReviewImageMimeTypeSchema>;
+export type ReviewTextAnchor = z.infer<typeof ReviewTextAnchorSchema>;
 export type ReviewDocument = z.infer<typeof ReviewDocumentSchema>;
 export type ErrorReviewDocument = z.infer<typeof ErrorReviewDocumentSchema>;
 export type ReviewImageChunkRequest = z.infer<typeof ReviewImageChunkRequestSchema>;

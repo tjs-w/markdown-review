@@ -68,6 +68,25 @@ describe("comment references", () => {
 });
 
 describe("persisted state migration", () => {
+  test("preserves valid text anchors and drops malformed legacy anchors", () => {
+    const base = {
+      ...queuedItem(),
+      textAnchor: { version: 1, start: 4, end: 17, prefix: "pre", suffix: "post" },
+    } as const;
+    const normalized = normalizePersistedReviewState(
+      {
+        path: document.path,
+        theme: "light",
+        queue: [base, { ...base, id: "feedback-2", serial: 2, textAnchor: { start: -1 } }],
+        nextSerial: 3,
+        lastSubmission: null,
+      },
+      now,
+    );
+    expect(normalized.queue[0]?.textAnchor).toEqual(base.textAnchor);
+    expect(normalized.queue[1]?.textAnchor).toBeUndefined();
+  });
+
   test("caps the queue, repairs serials, clamps anchors, and ignores legacy history", () => {
     const inputQueue = Array.from({ length: 25 }, (_, index) => ({
       id: `id-${index}`,

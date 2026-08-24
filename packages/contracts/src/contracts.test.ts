@@ -2,11 +2,15 @@ import { describe, expect, test } from "bun:test";
 
 import {
   ErrorReviewDocumentSchema,
+  IMAGE_CHUNK_BYTES,
   MAX_INLINE_IMAGES,
   PersistedReviewStateSchema,
   PrivateReviewImageChunkSchema,
   ReviewBatchV1Schema,
   ReviewDocumentSchema,
+  ReviewImageDescriptorSchema,
+  ReviewImageMimeTypeSchema,
+  ReviewSelectionSchema,
   ReviewSubmissionSchema,
 } from "./index";
 
@@ -107,6 +111,72 @@ describe("portable review contracts", () => {
     ).toBe(true);
   });
 
+  test("allows only supported static raster MIME types across image contracts", () => {
+    const descriptor = {
+      id: "image-1",
+      revision: "i1",
+      modifiedAt: "2026-08-23T00:00:00.000Z",
+      byteLength: 4,
+      chunkCount: 1,
+      width: 1,
+      height: 1,
+    };
+
+    for (const mimeType of ["image/png", "image/jpeg", "image/webp"] as const) {
+      expect(ReviewImageMimeTypeSchema.parse(mimeType)).toBe(mimeType);
+      expect(ReviewImageDescriptorSchema.safeParse({ ...descriptor, mimeType }).success).toBe(true);
+      expect(
+        PrivateReviewImageChunkSchema.safeParse({
+          kind: "markdown-review-image-chunk",
+          reviewSessionId: "8707d8a0-b84e-4a46-98e1-68ca135945de",
+          revision: "r1",
+          imageId: descriptor.id,
+          imageRevision: descriptor.revision,
+          mimeType,
+          chunkIndex: 0,
+          chunkCount: 1,
+          byteOffset: 0,
+          byteLength: 3,
+          data: "AAAA",
+        }).success,
+      ).toBe(true);
+    }
+
+    for (const mimeType of ["image/gif", "image/avif", "image/svg+xml"]) {
+      expect(ReviewImageMimeTypeSchema.safeParse(mimeType).success).toBe(false);
+      expect(ReviewImageDescriptorSchema.safeParse({ ...descriptor, mimeType }).success).toBe(
+        false,
+      );
+    }
+  });
+
+  test("requires descriptor chunk counts to match the encoded byte length", () => {
+    const descriptor = {
+      id: "image-1",
+      mimeType: "image/png",
+      revision: "i1",
+      modifiedAt: "2026-08-23T00:00:00.000Z",
+      width: 1,
+      height: 1,
+    } as const;
+
+    expect(
+      ReviewImageDescriptorSchema.safeParse({ ...descriptor, byteLength: 1, chunkCount: 1 })
+        .success,
+    ).toBe(true);
+    expect(
+      ReviewImageDescriptorSchema.safeParse({ ...descriptor, byteLength: 1, chunkCount: 2 })
+        .success,
+    ).toBe(false);
+    expect(
+      ReviewImageDescriptorSchema.safeParse({
+        ...descriptor,
+        byteLength: IMAGE_CHUNK_BYTES + 1,
+        chunkCount: 1,
+      }).success,
+    ).toBe(false);
+  });
+
   test("accepts the unique-image boundary and rejects one descriptor beyond it", () => {
     const document = {
       kind: "markdown-review-document" as const,
@@ -161,6 +231,30 @@ describe("portable review contracts", () => {
         queue: [],
         nextSerial: 0,
         lastSubmission: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  test("accepts bounded text anchors and rejects inverted or oversized anchors", () => {
+    const selection = {
+      startLine: 1,
+      endLine: 1,
+      anchorX: 0.5,
+      anchorY: 0.5,
+      quote: "selected",
+      textAnchor: { version: 1, start: 2, end: 10, prefix: "a", suffix: "b" },
+    } as const;
+    expect(ReviewSelectionSchema.safeParse(selection).success).toBe(true);
+    expect(
+      ReviewSelectionSchema.safeParse({
+        ...selection,
+        textAnchor: { ...selection.textAnchor, end: 2 },
+      }).success,
+    ).toBe(false);
+    expect(
+      ReviewSelectionSchema.safeParse({
+        ...selection,
+        textAnchor: { ...selection.textAnchor, prefix: "x".repeat(65) },
       }).success,
     ).toBe(false);
   });

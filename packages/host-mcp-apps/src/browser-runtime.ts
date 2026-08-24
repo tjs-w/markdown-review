@@ -4,11 +4,13 @@ import {
   type ReviewImageDecoder,
 } from "@markdown-review/review-ui";
 
+import { createBrowserImageDecoder } from "./browser-image-decoder";
 import { createMcpAppsHost, type McpAppsHostOptions } from "./mcp-apps-host";
 
 export interface BrowserRuntimeDependencies {
   readonly hostWindow?: Window;
   readonly createHost?: typeof createMcpAppsHost;
+  readonly imageDecoder?: ReviewImageDecoder;
   readonly mount?: typeof mountMarkdownReview;
   readonly submissionFormatter?: McpAppsHostOptions["submissionFormatter"];
 }
@@ -26,15 +28,7 @@ export function startMarkdownReviewRuntime(
   const mount = dependencies.mount ?? mountMarkdownReview;
   const reviewRef: { current?: MarkdownReviewHandle } = {};
   let reconnect: () => void = () => undefined;
-  const imageDecoder: ReviewImageDecoder = {
-    decodePng(bytes) {
-      const decoder = (
-        hostWindow as Window & typeof globalThis & { MarkdownReviewPng?: ReviewImageDecoder }
-      ).MarkdownReviewPng;
-      if (!decoder) throw new Error("The bundled PNG decoder is unavailable");
-      return decoder.decodePng(bytes);
-    },
-  };
+  const imageDecoder = dependencies.imageDecoder ?? createBrowserImageDecoder(hostWindow);
 
   const host = createHost({
     hostWindow,

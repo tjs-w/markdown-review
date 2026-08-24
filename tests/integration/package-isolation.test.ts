@@ -22,10 +22,6 @@ async function installShippingArtifacts(pluginRoot: string): Promise<void> {
       join(sourceRoot, "web", "dist", "review.js"),
       join(pluginRoot, "web", "dist", "review.js"),
     ),
-    copyFile(
-      join(sourceRoot, "web", "dist", "png-decoder.js"),
-      join(pluginRoot, "web", "dist", "png-decoder.js"),
-    ),
   ]);
 }
 
@@ -56,7 +52,7 @@ describe("isolated shipping package", () => {
     await client.connect(transport);
     try {
       expect((await client.listTools()).tools).toHaveLength(3);
-      const resource = await client.readResource({ uri: "ui://markdown-review/v18.html" });
+      const resource = await client.readResource({ uri: "ui://markdown-review/v19.html" });
       const content = resource.contents[0];
       expect(content && "text" in content ? content.text : "").toContain(">Submit<");
       expect(
@@ -82,7 +78,6 @@ describe("isolated shipping package", () => {
       writeFile(join(pluginRoot, "server", "dist", "server.cjs"), "throw new Error('old');\n"),
       writeFile(join(pluginRoot, "web", "review.html"), "<title>Old review</title>\n"),
       writeFile(join(pluginRoot, "web", "dist", "review.js"), "old\n"),
-      writeFile(join(pluginRoot, "web", "dist", "png-decoder.js"), "old\n"),
     ]);
 
     await installShippingArtifacts(pluginRoot);
@@ -96,7 +91,7 @@ describe("isolated shipping package", () => {
     });
     await client.connect(transport);
     try {
-      const resource = await client.readResource({ uri: "ui://markdown-review/v18.html" });
+      const resource = await client.readResource({ uri: "ui://markdown-review/v19.html" });
       const content = resource.contents[0];
       const html = content && "text" in content ? content.text : "";
       expect(html).toContain("<title>Markdown Review</title>");

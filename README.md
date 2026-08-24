@@ -11,7 +11,7 @@ Markdown Review is a local-first MCP Apps interface for reviewing rendered Markd
 - Inline comment markers numbered `#1`, `#2`, and so on.
 - A review queue that submits all comments together to avoid conflicting edits.
 - References between queued comments using `#N`; write `\#N` or `` `#N` `` for literal text.
-- Relative local PNG rendering with bounded, private chunk transport.
+- Relative local PNG, JPEG, and static WebP rendering with bounded, private chunk transport.
 - Automatic review after Codex creates or materially edits a Markdown document.
 
 The Markdown source is always canonical. The component is a read-only review surface; only Codex edits the source file with its normal filesystem tools.
@@ -32,13 +32,13 @@ local .md file
 The MCP server is intentionally narrow:
 
 1. `open_markdown_review` validates and renders an absolute `.md` or `.markdown` path.
-2. Component-only tools hydrate the rendered document and stream approved local PNGs in bounded chunks.
+2. Component-only tools hydrate the rendered document and stream approved local raster images in bounded chunks.
 3. The model-visible tool result contains file metadata, not the complete document. The rendered content is delivered privately to the component.
 4. The skill explains how Codex should interpret review feedback and modify the underlying Markdown safely.
 
 This separation is the reason the project includes MCP: the server connects a Codex tool invocation to a trusted interactive component. A static HTML file by itself cannot receive the selected source file, return structured review comments to the active task, or maintain this context boundary.
 
-The implementation is split into host-neutral TypeScript workspaces. `contracts` validates every boundary, `core` owns pure review state, `markdown-node` reads and renders local files, and `review-ui` mounts against narrow document, submission, presentation, and state ports. `host-mcp-apps` supplies a standards-based runtime whose default submission is structured JSON; the Codex browser composition explicitly adds the concise `$markdown-review` formatter. Optional `window.openai` widget-state compatibility remains isolated. A future Tauri shell can reuse the contracts, core, and UI and supply Rust IPC ports; Tauri is not included today.
+The implementation is split into host-neutral TypeScript workspaces. `contracts` validates every boundary, `core` owns pure review state, `markdown-node` reads and renders local files, and `review-ui` mounts against narrow document, submission, presentation, and state ports. `host-mcp-apps` supplies a standards-based runtime whose default submission is structured JSON; the Codex browser composition explicitly adds the concise `$markdown-review` formatter. Review state stays inside the component instead of being published as model-visible legacy widget context. A future Tauri shell can reuse the contracts, core, and UI and supply Rust IPC ports; Tauri is not included today.
 
 ## Host support
 
@@ -130,10 +130,10 @@ Then restart the desktop app and install the plugin from the local marketplace s
 - The component cannot write the Markdown file.
 - Rendered HTML is sanitized before it reaches the component.
 - Remote, absolute, and out-of-directory images are not loaded.
-- Only relative paths to static, 8-bit PNG files inside the Markdown file's directory are supported. Explicit alpha channels and bounded indexed-palette transparency are supported; color-key `tRNS` transparency is rejected to avoid silent decoder incompatibilities. JPEG, GIF, WebP, SVG, APNG, 16-bit PNG, and PNGs with embedded compressed color profiles are not rendered.
+- Only relative paths to PNG, JPEG (`.jpg`/`.jpeg`), and static WebP files inside the Markdown file's directory are supported. The server verifies extension, signature, bounded container structure, dimensions, and animation policy before the browser performs native decoding. GIF, AVIF, SVG, APNG, and animated WebP are not rendered.
 - The component resource declares no network or remote resource domains.
 - A Markdown file is limited to 2 MiB.
-- A review processes at most 64 local-image references—including invalid references—5 MiB per unique image, and 12 MiB of unique image snapshots in total, with decoded-dimension, decompression, and rendered-pixel limits. References that resolve to the same canonical file share one immutable snapshot and verified client decode.
+- A review processes at most 64 local-image references—including invalid references—5 MiB per unique image, and 12 MiB of unique image snapshots in total, with decoded-dimension and rendered-pixel limits. References that resolve to the same canonical file or identical digest share one immutable snapshot and verified client decode.
 - Canonical paths and opened-file identities are rechecked around each bounded read. These checks are defense in depth, not an OS sandbox against another local process that can continuously replace the document directory hierarchy during a read.
 - Component access uses opaque, expiring review-session capabilities. Sessions slide for two hours and are bounded by a six-session LRU and a 72 MiB aggregate image cache.
 - Image bytes and SHA-256 digests are snapshotted into a session, so later file mutations cannot change an in-flight review.
@@ -153,12 +153,11 @@ Review only files you intend to expose to the local plugin process. Submitted co
 | `packages/core/`                   | Pure queue, reference, migration, and submission state         |
 | `packages/markdown-node/`          | Bounded local Markdown/image loading and rendering             |
 | `packages/review-ui/`              | Reusable DOM controller over host-neutral ports                |
-| `packages/host-mcp-apps/`          | Standard MCP Apps and optional Codex compatibility adapter     |
+| `packages/host-mcp-apps/`          | Standard MCP Apps host adapter and native browser image decode |
 | `packages/mcp-server/`             | MCP server factory, tools, and resource assembly               |
 | `server/src/main.ts`               | Node stdio composition root                                    |
 | `server/dist/server.cjs`           | Checked-in executable MCP server bundle                        |
 | `web/review.html`                  | Static accessible HTML/CSS shell with bundle injection markers |
-| `web/src/png-decoder.ts`           | Browser-side PNG decoder source                                |
 | `web/dist/review.js`               | Checked-in minified MCP Apps UI bundle                         |
 | `tests/` and package tests         | Unit, integration, adapter, and browser coverage               |
 
@@ -170,7 +169,7 @@ Review only files you intend to expose to the local plugin process. Submitted co
 
 **The side panel is blank.** Run `bun run verify` in the plugin checkout, rebuild with `bun run build`, refresh the marketplace installation, and retry in a new task.
 
-**A local image does not render.** Use a relative `.png` path located inside the Markdown file's directory and confirm it is within the documented size and dimension limits.
+**A local image does not render.** Use a relative `.png`, `.jpg`, `.jpeg`, or static `.webp` path located inside the Markdown file's directory and confirm it is within the documented size and dimension limits.
 
 ## Documentation
 

@@ -28,7 +28,7 @@ const EXPECTED_SOURCES = new Set([
   "packages/mcp-server/src/server.ts",
   "packages/review-ui/src/mount.ts",
   "packages/review-ui/src/image-assembly.ts",
-  "web/src/png-decoder.ts",
+  "packages/review-ui/src/review-highlights.ts",
 ]);
 
 function emptyTotals(): Totals {

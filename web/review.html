@@ -21,6 +21,9 @@
         --warning: #9a6700;
         --warning-soft: #fff8c5;
         --success: #1a7f37;
+        --review-highlight-bg: #fff1a8;
+        --review-highlight-fg: #1f2328;
+        --review-highlight-edge: #9a6700;
         --shadow: 0 8px 24px rgba(140, 149, 159, 0.2);
         --shadow-small: 0 3px 12px rgba(140, 149, 159, 0.16);
       }
@@ -40,6 +43,9 @@
         --warning: #d29922;
         --warning-soft: #3d2f12;
         --success: #89c99a;
+        --review-highlight-bg: #4b3f16;
+        --review-highlight-fg: #d8dce2;
+        --review-highlight-edge: #d29922;
         --shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
         --shadow-small: 0 3px 14px rgba(0, 0, 0, 0.26);
       }
@@ -541,6 +547,19 @@
       }
       .review-block.has-comments {
         box-shadow: inset -2px 0 var(--accent-soft);
+      }
+      ::highlight(review-comments) {
+        background: var(--review-highlight-bg);
+        color: var(--review-highlight-fg);
+        text-decoration: underline 1px var(--review-highlight-edge);
+        text-underline-offset: 0.16em;
+      }
+      mark.review-highlight {
+        padding: 0;
+        background: var(--review-highlight-bg);
+        color: var(--review-highlight-fg);
+        text-decoration: underline 1px var(--review-highlight-edge);
+        text-underline-offset: 0.16em;
       }
       .review-block.is-selected {
         background: color-mix(in srgb, var(--accent-soft) 38%, transparent);
@@ -1079,6 +1098,16 @@
         .review-block.is-selected {
           outline: 2px solid Highlight;
         }
+        ::highlight(review-comments) {
+          background: Highlight;
+          color: HighlightText;
+          text-decoration-color: HighlightText;
+        }
+        mark.review-highlight {
+          background: Highlight;
+          color: HighlightText;
+          text-decoration-color: HighlightText;
+        }
         .annotation-badge {
           border-color: Canvas;
           outline: 2px solid ButtonText;
@@ -1351,7 +1380,6 @@
       aria-live="polite"
       aria-atomic="true"
     ></div>
-    <!-- MARKDOWN_REVIEW_PNG_DECODER -->
     <!-- MARKDOWN_REVIEW_APP -->
   </body>
 </html>

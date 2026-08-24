@@ -8,6 +8,7 @@ import {
   PersistedReviewStateSchema,
   QueuedFeedbackSchema,
   ReviewSubmissionSchema,
+  ReviewTextAnchorSchema,
   type PersistedReviewState,
   type QueuedFeedback,
   type ReviewSelection,
@@ -76,6 +77,7 @@ function candidateQueueItem(
   if (!id || !path || !feedback) return null;
 
   const possibleSerial = Number(item["serial"]);
+  const textAnchor = ReviewTextAnchorSchema.safeParse(item["textAnchor"]);
   const serial =
     Number.isSafeInteger(possibleSerial) &&
     possibleSerial > 0 &&
@@ -93,6 +95,7 @@ function candidateQueueItem(
     anchorX: Math.max(0, Math.min(1, finiteNumber(item["anchorX"], 0.96))),
     anchorY: Math.max(0, Math.min(1, finiteNumber(item["anchorY"], 1))),
     quote: typeof item["quote"] === "string" ? item["quote"].slice(0, MAX_QUOTE_LENGTH) : "",
+    ...(textAnchor.success ? { textAnchor: textAnchor.data } : {}),
     feedback,
     createdAt:
       typeof item["createdAt"] === "string" && item["createdAt"].length > 0

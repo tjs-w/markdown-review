@@ -9,7 +9,7 @@ Contributions to Markdown Review should preserve one core invariant: the `.md` o
 3. Make source changes in `packages/`, `server/src/`, `web/src/`, `skills/`, or `tests/`.
 4. Run `bun run verify`, then `bun run build` when checked-in artifacts changed.
 5. If UI behavior changed, run the browser harness and inspect keyboard, pointer, light-theme, and dark-theme behavior.
-6. Include updated `server/dist/server.cjs`, `web/dist/review.js`, and `web/dist/png-decoder.js` output when their source changes.
+6. Include updated `server/dist/server.cjs` and `web/dist/review.js` output when their source changes.
 
 Keep reusable packages host-neutral: `review-ui` must not import Node, MCP, Codex, or Tauri APIs. Host-specific behavior belongs in an adapter behind the documented ports. Validate data received across host, persisted-state, document, and image boundaries before use.
 

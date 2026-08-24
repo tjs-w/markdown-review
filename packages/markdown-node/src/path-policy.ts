@@ -1,6 +1,8 @@
 import { realpath } from "node:fs/promises";
 import { dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 
+import { imageMimeTypeForPath } from "./image.js";
+
 export interface MarkdownPathPolicy {
   resolveMarkdownPath(pathInput: string): Promise<string>;
   resolveLocalImagePath(markdownPath: string, source: string): Promise<string>;
@@ -32,7 +34,7 @@ export class DefaultMarkdownPathPolicy implements MarkdownPathPolicy {
 
   async resolveLocalImagePath(markdownPath: string, source: string): Promise<string> {
     if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(source) || isAbsolute(source)) {
-      throw new Error("only relative local PNG paths are supported");
+      throw new Error("only relative local PNG, JPEG, and WebP paths are supported");
     }
 
     const pathWithoutSuffix = source.split(/[?#]/, 1)[0] ?? "";
@@ -51,8 +53,8 @@ export class DefaultMarkdownPathPolicy implements MarkdownPathPolicy {
     if (!isWithinDirectory(documentDirectory, candidate)) {
       throw new Error("the path is outside the Markdown folder");
     }
-    if (extname(candidate).toLowerCase() !== ".png") {
-      throw new Error("use a PNG file for local review images");
+    if (!imageMimeTypeForPath(candidate)) {
+      throw new Error("use a PNG, JPEG, or WebP file for local review images");
     }
     return candidate;
   }

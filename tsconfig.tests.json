@@ -12,9 +12,7 @@
     "packages/**/test/**/*.ts",
     "scripts/check-coverage.ts",
     "scripts/*.test.ts",
-    "tests/**/*.ts",
-    "web/src/png-decoder.ts",
-    "web/src/*.test.ts"
+    "tests/**/*.ts"
   ],
   "references": [
     { "path": "./packages/contracts" },

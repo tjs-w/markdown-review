@@ -14,8 +14,8 @@ import {
   MAX_INLINE_IMAGE_TOTAL_PIXELS,
 } from "./constants.js";
 import { readFileHandleBounded } from "./bounded-read.js";
+import { inspectLocalImage } from "./image.js";
 import type { MarkdownPathPolicy } from "./path-policy.js";
-import { readPngDimensions, validatePng } from "./png.js";
 
 export interface StoredImage {
   readonly descriptor: ReviewImageDescriptor;
@@ -33,6 +33,7 @@ export interface RenderedMarkdown {
 interface ImageBudget {
   readonly items: StoredImage[];
   readonly snapshotsByPath: Map<string, StoredImage>;
+  readonly snapshotsByDigest: Map<string, StoredImage>;
   references: number;
   totalBytes: number;
   totalPixels: number;
@@ -103,24 +104,31 @@ async function snapshotImage(
       { expectedCanonicalPath: imagePath },
     );
     if (snapshot.sizeBytes === 0) throw new Error("the local file is empty or unavailable");
-    if (budget.totalBytes + snapshot.sizeBytes > MAX_INLINE_IMAGE_TOTAL_BYTES) {
-      throw new Error("the document exceeds the review image-size limit");
-    }
-
-    const { width, height, pixels } = readPngDimensions(snapshot.bytes);
+    const { width, height, pixels, mimeType } = inspectLocalImage(snapshot.bytes, imagePath);
     if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION || pixels > MAX_IMAGE_PIXELS) {
       throw new Error("its decoded dimensions exceed the safety limit");
     }
-    validatePng(snapshot.bytes, { width, height, pixels });
+    const sha256 = createHash("sha256").update(snapshot.bytes).digest("hex");
+    const duplicate = budget.snapshotsByDigest.get(sha256);
+    if (duplicate) {
+      if (budget.totalPixels + pixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
+        throw new Error("the document exceeds the decoded image limit");
+      }
+      budget.snapshotsByPath.set(imagePath, duplicate);
+      budget.totalPixels += pixels;
+      return imagePlaceholder(alt, duplicate);
+    }
+    if (budget.totalBytes + snapshot.sizeBytes > MAX_INLINE_IMAGE_TOTAL_BYTES) {
+      throw new Error("the document exceeds the review image-size limit");
+    }
     if (budget.totalPixels + pixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
       throw new Error("the document exceeds the decoded image limit");
     }
 
     const id = `local-image-${budget.items.length + 1}`;
-    const sha256 = createHash("sha256").update(snapshot.bytes).digest("hex");
     const descriptor: ReviewImageDescriptor = {
       id,
-      mimeType: "image/png",
+      mimeType,
       revision: sha256,
       modifiedAt: snapshot.modifiedAt,
       byteLength: snapshot.sizeBytes,
@@ -131,6 +139,7 @@ async function snapshotImage(
     const stored = { descriptor, bytes: snapshot.bytes, sha256 };
     budget.items.push(stored);
     budget.snapshotsByPath.set(imagePath, stored);
+    budget.snapshotsByDigest.set(sha256, stored);
     budget.totalBytes += snapshot.sizeBytes;
     budget.totalPixels += pixels;
     return imagePlaceholder(alt, stored);
@@ -194,6 +203,7 @@ export async function renderMarkdown(
   const budget: ImageBudget = {
     items: [],
     snapshotsByPath: new Map(),
+    snapshotsByDigest: new Map(),
     references: 0,
     totalBytes: 0,
     totalPixels: 0,

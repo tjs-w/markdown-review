@@ -1,4 +1,5 @@
 import {
+  IMAGE_CHUNK_BYTES,
   MAX_INLINE_IMAGE_REFERENCES,
   MAX_INLINE_IMAGE_TOTAL_PIXELS,
   type PrivateReviewImageChunk,
@@ -30,6 +31,12 @@ import type {
 } from "./ports";
 import { assembleImageChunks } from "./image-assembly";
 import { shouldRetryPortError } from "./ports";
+import {
+  captureReviewTextAnchor,
+  clearReviewHighlights,
+  findReviewHighlightBlock,
+  renderReviewHighlights,
+} from "./review-highlights";
 
 const IMAGE_WORKERS = 2;
 const CHUNK_WORKERS = 4;
@@ -250,9 +257,11 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   destroy(): void {
     if (this.#destroyed) return;
     this.#destroyed = true;
+    this.#generation += 1;
     this.#abort.abort();
     this.#decodedImages.clear();
     this.#unsubscribePresentation();
+    clearReviewHighlights(this.#element("document"));
     if (this.#toastTimer !== undefined) clearTimeout(this.#toastTimer);
   }
 
@@ -407,12 +416,17 @@ class MarkdownReviewController implements MarkdownReviewHandle {
 
   #findAnchorBlock(item: QueuedFeedback): HTMLElement | null {
     const blocks = [...this.#root.querySelectorAll<HTMLElement>(".review-block")];
+    const resolved = findReviewHighlightBlock(this.#element("document"), {
+      ...item,
+      stale: this.#itemIsStale(item),
+    });
+    if (resolved) return resolved;
     if (this.#itemIsStale(item) && item.quote) {
       const quote = item.quote.replace(/\s+/g, " ").trim().toLowerCase();
-      const relocated = blocks.find((block) =>
+      const relocated = blocks.filter((block) =>
         block.innerText.replace(/\s+/g, " ").trim().toLowerCase().includes(quote),
       );
-      if (relocated) return relocated;
+      if (relocated.length === 1) return relocated[0] ?? null;
     }
     return (
       blocks.find((block) => {
@@ -435,6 +449,13 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#root.querySelectorAll(".review-block.has-comments").forEach((element) => {
       element.classList.remove("has-comments");
     });
+    const currentItems = this.#round.persisted.queue.filter(
+      (item) => item.path === this.#document?.path,
+    );
+    renderReviewHighlights(
+      this.#element("document"),
+      currentItems.map((item) => ({ ...item, stale: this.#itemIsStale(item) })),
+    );
     const groups = new Map<HTMLElement, QueuedFeedback[]>();
     const stacks = new Map<HTMLElement, Map<number, number>>();
     for (const item of this.#round.persisted.queue) {
@@ -688,8 +709,8 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       this.#element("selection-action").hidden = true;
       return;
     }
-    const quote = nativeSelection.toString().trim();
-    if (!quote) {
+    const nativeQuote = nativeSelection.toString().trim();
+    if (!nativeQuote) {
       this.#pendingSelection = null;
       this.#element("selection-action").hidden = true;
       return;
@@ -715,6 +736,8 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     const startLine = Number(startBlock.dataset["startLine"]);
     const endLine = Number(endBlock.dataset["endLine"]);
     if (!Number.isSafeInteger(startLine) || !Number.isSafeInteger(endLine)) return;
+    const captured = captureReviewTextAnchor(this.#element("document"), range);
+    const quote = (captured?.quote ?? nativeQuote).slice(0, 1400);
     const rect = range.getBoundingClientRect();
     const blockRect = endBlock.getBoundingClientRect();
     this.#pendingSelection = {
@@ -725,7 +748,8 @@ class MarkdownReviewController implements MarkdownReviewHandle {
         0.96,
       ),
       anchorY: clamp((rect.bottom - blockRect.top) / Math.max(1, blockRect.height), 1),
-      quote: quote.slice(0, 1400),
+      quote,
+      ...(captured && captured.quote.length <= 1400 ? { textAnchor: captured.textAnchor } : {}),
       block: endBlock,
     };
     const button = this.#element<HTMLButtonElement>("selection-action");
@@ -797,6 +821,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       anchorX: clamp(selection.anchorX, 0.96),
       anchorY: clamp(selection.anchorY, 1),
       quote: selection.quote.slice(0, 1400),
+      ...(selection.textAnchor ? { textAnchor: selection.textAnchor } : {}),
       block: selection.block,
     };
     this.#editingId = options.editingId ?? null;
@@ -875,9 +900,10 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     const wasEditing = this.#editingId !== null;
     let queued: QueuedFeedback | undefined;
     if (this.#editingId) {
+      const original = this.#round.persisted.queue.find((item) => item.id === this.#editingId);
       this.#round = updateQueuedFeedback(this.#round, this.#editingId, {
         selection: this.#plainSelection(selection),
-        revision: this.#document.revision,
+        revision: original?.revision ?? this.#document.revision,
         feedback,
       });
       queued = this.#round.persisted.queue.find((item) => item.id === this.#editingId);
@@ -916,6 +942,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       anchorX: selection.anchorX,
       anchorY: selection.anchorY,
       quote: selection.quote,
+      ...(selection.textAnchor ? { textAnchor: selection.textAnchor } : {}),
     };
   }
 
@@ -1123,8 +1150,8 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     const promise = (async (): Promise<DecodedReviewImage> => {
       const bytes = await this.#loadImageBytes(reviewDocument, image, placeholder, generation);
       if (generation !== this.#generation) throw new Error("Image load superseded");
-      if (!this.#imageDecoder) throw new Error("The bundled PNG decoder is unavailable");
-      const decoded = this.#imageDecoder.decodePng(bytes);
+      if (!this.#imageDecoder) throw new Error("Native browser image decoding is unavailable");
+      const decoded = await this.#imageDecoder.decode(bytes, image.mimeType);
       if (decoded.width !== image.width || decoded.height !== image.height) {
         throw new Error("Decoded dimensions did not match the review");
       }
@@ -1150,8 +1177,12 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       chunk.revision !== reviewDocument.revision ||
       chunk.imageId !== image.id ||
       chunk.imageRevision !== image.revision ||
+      chunk.mimeType !== image.mimeType ||
       chunk.chunkIndex !== chunkIndex ||
-      chunk.chunkCount !== image.chunkCount
+      chunk.chunkCount !== image.chunkCount ||
+      chunk.byteOffset !== chunkIndex * IMAGE_CHUNK_BYTES ||
+      chunk.byteLength !==
+        Math.min(IMAGE_CHUNK_BYTES, image.byteLength - chunkIndex * IMAGE_CHUNK_BYTES)
     ) {
       throw new Error(`Image chunk ${chunkIndex + 1} did not match the review`);
     }
@@ -1185,6 +1216,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     placeholder: HTMLElement,
     generation: number,
   ): Promise<void> {
+    if (this.#destroyed) return;
     const alt = placeholder.dataset["alt"] || "Local Markdown image";
     try {
       if (placeholder.dataset["loading"] === "true") return;
@@ -1192,12 +1224,9 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       placeholder.classList.remove("is-error");
       const status = placeholder.querySelector<HTMLElement>(".local-image-status");
       if (status) status.textContent = "Loading image…";
-      if (!image || image.mimeType !== "image/png") throw new Error("PNG metadata is unavailable");
+      if (!image) throw new Error("Image metadata is unavailable");
       const decoded = await this.#loadDecodedImage(reviewDocument, image, placeholder, generation);
-      if (generation !== this.#generation) {
-        placeholder.dataset["loading"] = "";
-        return;
-      }
+      if (this.#destroyed || generation !== this.#generation) return;
       const canvas = this.#root.createElement("canvas");
       canvas.className = "local-image-canvas";
       canvas.setAttribute("role", "img");
@@ -1211,6 +1240,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       context.putImageData(pixels, 0, 0);
       placeholder.replaceWith(canvas);
     } catch (error) {
+      if (this.#destroyed) return;
       if (generation === this.#generation && !errorMessage(error).includes("superseded")) {
         this.#setImageError(placeholder, image, alt, error);
       } else {
@@ -1241,13 +1271,13 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       }
       references += 1;
       const image = images.get(placeholder.dataset["localImageId"] ?? "");
-      if (!image || image.mimeType !== "image/png") {
-        this.#setPermanentImageError(placeholder, "PNG metadata is unavailable");
+      if (!image) {
+        this.#setPermanentImageError(placeholder, "Image metadata is unavailable");
         continue;
       }
       const pixels = image.width * image.height;
       if (!Number.isSafeInteger(pixels) || pixels <= 0) {
-        this.#setPermanentImageError(placeholder, "PNG dimensions are invalid");
+        this.#setPermanentImageError(placeholder, "Image dimensions are invalid");
         continue;
       }
       if (totalPixels + pixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
@@ -1286,6 +1316,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       Array.from({ length: Math.min(IMAGE_WORKERS, queue.length) }, () => worker()),
     );
     if (generation === this.#generation) {
+      this.#decodedImages.clear();
       this.#ports.presentation.notifyIntrinsicHeight?.(this.#root.documentElement.scrollHeight);
     }
   }
@@ -1355,6 +1386,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     );
     this.#closeComposer(false, false);
     const surface = this.#element("document");
+    clearReviewHighlights(surface);
     if (reviewDocument.html) {
       surface.replaceChildren(sanitizeReviewHtml(this.#root, reviewDocument.html));
     } else {

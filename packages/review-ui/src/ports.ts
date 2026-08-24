@@ -3,6 +3,7 @@ import type {
   PrivateReviewImageChunk,
   ReviewDocument,
   ReviewImageChunkRequest,
+  ReviewImageMimeType,
   ReviewSubmission,
 } from "@markdown-review/contracts";
 
@@ -112,7 +113,7 @@ export interface DecodedReviewImage {
 }
 
 export interface ReviewImageDecoder {
-  decodePng(bytes: Uint8Array): DecodedReviewImage;
+  decode(bytes: Uint8Array, mimeType: ReviewImageMimeType): Promise<DecodedReviewImage>;
 }
 
 export interface MountMarkdownReviewOptions {
