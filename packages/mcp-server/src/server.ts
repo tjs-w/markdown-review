@@ -19,7 +19,7 @@ import { z } from "zod";
 
 import type { ReviewUiAssetLoader } from "./assets.js";
 
-export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v16.html";
+export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v17.html";
 const PNG_DECODER_MARKER = "<!-- MARKDOWN_REVIEW_PNG_DECODER -->";
 const REVIEW_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
 

@@ -50,6 +50,7 @@ function normalizeHostContext(value: unknown): HostContext {
     ...(context.availableDisplayModes
       ? { availableDisplayModes: context.availableDisplayModes }
       : {}),
+    ...(context.containerDimensions ? { containerDimensions: context.containerDimensions } : {}),
     ...(context.locale ? { locale: context.locale } : {}),
   };
 }
@@ -86,6 +87,8 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
   let serverTools = false;
   let acceptedInitialSessionId: string | undefined;
   let pendingInitialSessionId: string | undefined;
+  let pendingIntrinsicHeight: number | undefined;
+  let intrinsicHeightQueued = false;
   let closing: Promise<void> | undefined;
 
   const reportError = (error: unknown): void => {
@@ -150,7 +153,7 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
       return externalLinks;
     },
     get intrinsicHeight(): boolean {
-      return connected;
+      return connected && context.displayMode === "inline";
     },
     get submission(): boolean {
       return messages;
@@ -221,12 +224,16 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
         if (result.isError) throw new Error("The host could not open the link");
       },
       notifyIntrinsicHeight(height) {
-        void app
-          .sendSizeChanged({
-            width: Math.ceil(hostWindow.innerWidth),
-            height: Math.ceil(height),
-          })
-          .catch(reportError);
+        pendingIntrinsicHeight = Math.min(1_200, Math.max(68, Math.ceil(height)));
+        if (intrinsicHeightQueued) return;
+        intrinsicHeightQueued = true;
+        queueMicrotask(() => {
+          intrinsicHeightQueued = false;
+          const nextHeight = pendingIntrinsicHeight;
+          pendingIntrinsicHeight = undefined;
+          if (!connected || context.displayMode !== "inline" || nextHeight === undefined) return;
+          void app.sendSizeChanged({ height: nextHeight }).catch(reportError);
+        });
       },
     },
     state: createReviewStateStore(hostWindow),

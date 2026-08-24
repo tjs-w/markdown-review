@@ -205,6 +205,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   #renderKey: string | null = null;
   #activeLoad: ActiveLoad | null = null;
   #fullscreenRequestedFor: string | null = null;
+  #inlineReviewFallback = false;
   #sendingIds = new Set<string>();
   #returnFocus: HTMLElement | null = null;
   #lastSelectionAnnouncement: string | null = null;
@@ -374,10 +375,9 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     toggle.setAttribute("aria-pressed", String(theme === "dark"));
   }
 
-  #syncSurfaceLayout(forceReview = false): void {
+  #syncSurfaceLayout(): void {
     const wasVisible = this.#reviewSurfaceVisible();
-    const shouldShow =
-      forceReview || this.#currentDisplayMode() !== "inline" || this.#view.innerHeight >= 320;
+    const shouldShow = this.#inlineReviewFallback || this.#currentDisplayMode() !== "inline";
     this.#root.documentElement.dataset["surface"] = shouldShow ? "review" : "launcher";
     if (wasVisible !== shouldShow && this.#document) {
       void this.#installLocalImages(this.#document, this.#generation);
@@ -589,9 +589,10 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     launcherCount.hidden = count === 0;
     launcherCount.textContent = String(count);
     this.#element("top-count").textContent = String(total);
+    const commentsOpen = !this.#element("comments-panel").hidden;
     this.#element("comments-toggle").setAttribute(
       "aria-label",
-      total === 1 ? "Open 1 review comment" : `Open ${total} review comments`,
+      `${commentsOpen ? "Hide" : "Show"} ${total} review ${total === 1 ? "comment" : "comments"}`,
     );
     const send = this.#element<HTMLButtonElement>("send-all");
     send.hidden = count === 0;
@@ -618,28 +619,24 @@ class MarkdownReviewController implements MarkdownReviewHandle {
 
   #openCommentsPanel(): void {
     this.#renderCommentsPanel();
-    this.#element("comments-panel").hidden = false;
-    this.#element("comments-scrim").hidden = false;
-    this.#element("comments-toggle").setAttribute("aria-expanded", "true");
-    this.#setReviewChromeInert(true);
-    this.#element("close-comments").focus();
+    this.#setCommentsPanelOpen(true);
   }
 
   #closeCommentsPanel(restoreFocus = true): void {
-    this.#element("comments-panel").hidden = true;
-    this.#element("comments-scrim").hidden = true;
-    this.#element("comments-toggle").setAttribute("aria-expanded", "false");
-    this.#setReviewChromeInert(false);
+    this.#setCommentsPanelOpen(false);
     if (restoreFocus) this.#element("comments-toggle").focus();
   }
 
-  #setReviewChromeInert(inert: boolean): void {
-    const workspace = this.#element("document").closest<HTMLElement>(".workspace");
-    const topbar = this.#element("comments-toggle").closest<HTMLElement>(".topbar");
-    if (workspace) workspace.inert = inert;
-    if (topbar) topbar.inert = inert;
-    this.#element("toast").inert = inert;
-    this.#element("selection-action").inert = inert;
+  #setCommentsPanelOpen(open: boolean): void {
+    this.#element("comments-panel").hidden = !open;
+    this.#root.documentElement.dataset["commentsOpen"] = String(open);
+    const toggle = this.#element("comments-toggle");
+    toggle.setAttribute("aria-expanded", String(open));
+    const total = this.#allComments().length;
+    toggle.setAttribute(
+      "aria-label",
+      `${open ? "Hide" : "Show"} ${total} review ${total === 1 ? "comment" : "comments"}`,
+    );
   }
 
   #focusReviewBlock(block: HTMLElement | null): void {
@@ -1221,16 +1218,28 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       this.#ports.presentation.capabilities.displayMode === false ||
       !this.#ports.presentation.requestDisplayMode
     ) {
-      if (!automatic) this.#toast("Fullscreen is not available in this host.");
+      if (!automatic) {
+        this.#inlineReviewFallback = true;
+        this.#syncSurfaceLayout();
+        this.#toast("Fullscreen is unavailable. Opened the review inline.");
+      }
       return false;
     }
     try {
       const mode = await this.#ports.presentation.requestDisplayMode("fullscreen");
       this.#root.documentElement.dataset["displayMode"] = mode;
-      this.#syncSurfaceLayout(!automatic || mode === "fullscreen");
+      if (!automatic && mode === "inline") {
+        this.#inlineReviewFallback = true;
+        this.#toast("Fullscreen is unavailable. Opened the review inline.");
+      }
+      this.#syncSurfaceLayout();
       return mode === "fullscreen";
     } catch {
-      if (!automatic) this.#toast("Could not enter fullscreen.");
+      if (!automatic) {
+        this.#inlineReviewFallback = true;
+        this.#syncSurfaceLayout();
+        this.#toast("Could not enter fullscreen. Opened the review inline.");
+      }
       return false;
     }
   }
@@ -1411,13 +1420,6 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   #installListeners(): void {
     const signal = this.#abort.signal;
     this.#view.addEventListener(
-      "resize",
-      () => {
-        this.#syncSurfaceLayout();
-      },
-      { passive: true, signal },
-    );
-    this.#view.addEventListener(
       "scroll",
       () => {
         this.#pendingSelection = null;
@@ -1477,23 +1479,6 @@ class MarkdownReviewController implements MarkdownReviewHandle {
           event.preventDefault();
           event.target.closest<HTMLElement>(".markdown a[data-review-href]")?.click();
         }
-        if (event.key === "Tab" && !this.#element("comments-panel").hidden) {
-          const controls = [
-            ...this.#element("comments-panel").querySelectorAll<HTMLElement>(
-              'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
-            ),
-          ].filter((control) => !control.hidden);
-          const first = controls[0];
-          const last = controls.at(-1);
-          if (!first || !last) return;
-          if (event.shiftKey && this.#root.activeElement === first) {
-            event.preventDefault();
-            last.focus();
-          } else if (!event.shiftKey && this.#root.activeElement === last) {
-            event.preventDefault();
-            first.focus();
-          }
-        }
       },
       { signal },
     );
@@ -1542,13 +1527,6 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       { signal },
     );
     this.#element("close-comments").addEventListener(
-      "click",
-      () => {
-        this.#closeCommentsPanel();
-      },
-      { signal },
-    );
-    this.#element("comments-scrim").addEventListener(
       "click",
       () => {
         this.#closeCommentsPanel();

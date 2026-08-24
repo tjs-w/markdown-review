@@ -153,10 +153,19 @@
 
       .full-surface {
         display: none;
-        min-height: 100vh;
+        width: 100%;
+        height: 100vh;
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
       }
       html[data-surface="review"] .full-surface {
-        display: block;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+      html[data-surface="review"][data-display-mode="inline"] .full-surface {
+        height: auto;
+        min-height: 640px;
       }
       html[data-surface="review"] .launcher {
         display: none;
@@ -168,6 +177,7 @@
         display: flex;
         align-items: center;
         gap: 12px;
+        min-width: 0;
         min-height: 58px;
         padding: 10px 16px;
         border-bottom: 1px solid var(--line);
@@ -347,8 +357,20 @@
       }
 
       .workspace {
-        min-height: calc(100vh - 58px);
+        min-width: 0;
+        min-height: 0;
+        overflow: auto;
         padding: 24px 24px 92px;
+      }
+      .review-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        width: 100%;
+        min-width: 0;
+        min-height: 0;
+      }
+      html[data-comments-open="true"] .review-layout {
+        grid-template-columns: minmax(0, 1fr) clamp(148px, 38vw, 380px);
       }
       .paper {
         width: min(980px, 100%);
@@ -811,24 +833,14 @@
         color: var(--warning);
       }
 
-      .comments-scrim {
-        position: fixed;
-        inset: 58px 0 0;
-        z-index: 41;
-        background: rgba(31, 35, 40, 0.18);
-      }
       .comments-panel {
-        position: fixed;
-        top: 58px;
-        right: 0;
-        bottom: 0;
-        z-index: 42;
         display: flex;
         flex-direction: column;
-        width: min(380px, 100vw);
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
         border-left: 1px solid var(--control-line);
-        background: var(--paper);
-        box-shadow: var(--shadow);
+        background: var(--soft);
       }
       .comments-head {
         display: flex;
@@ -845,11 +857,16 @@
       }
       .comments-list {
         display: grid;
+        grid-template-columns: minmax(0, 1fr);
         gap: 10px;
-        overflow: auto;
+        min-width: 0;
+        min-height: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
         padding: 12px;
       }
       .comment-index-item {
+        min-width: 0;
         padding: 11px;
         border: 1px solid var(--line);
         border-radius: 8px;
@@ -871,11 +888,13 @@
         font-size: 12px;
         text-overflow: ellipsis;
         white-space: nowrap;
+        overflow-wrap: anywhere;
       }
       .comment-index-feedback {
         margin-top: 4px;
         font-size: 13px;
         white-space: pre-wrap;
+        overflow-wrap: anywhere;
       }
       .comment-index-actions {
         display: flex;
@@ -955,6 +974,29 @@
         }
       }
       @media (max-width: 520px) {
+        .markdown {
+          font-size: 15px;
+        }
+        .markdown h1 {
+          font-size: 1.5em;
+        }
+        .markdown h2 {
+          font-size: 1.25em;
+        }
+        .comments-head,
+        .comments-list {
+          padding: 8px;
+        }
+        .comment-index-item {
+          padding: 8px;
+        }
+        .comment-index-head {
+          align-items: flex-start;
+          flex-wrap: wrap;
+        }
+        .comment-index-actions .button {
+          flex: 1 1 100%;
+        }
         .inline-composer .composer-help-popover {
           top: 41px;
           right: -1px;
@@ -970,6 +1012,13 @@
           gap: 7px;
           padding: 8px;
         }
+        .identity {
+          display: none;
+        }
+        .actions {
+          width: 100%;
+          justify-content: flex-end;
+        }
         .actions {
           gap: 5px;
         }
@@ -981,11 +1030,20 @@
           width: 38px;
           height: 38px;
         }
-        .comments-panel {
-          top: 54px;
+      }
+      @media (max-width: 260px) {
+        .actions {
+          justify-content: center;
         }
-        .comments-scrim {
-          inset-block-start: 54px;
+        #comments-toggle,
+        #send-all {
+          width: 38px;
+          height: 38px;
+          padding: 0;
+        }
+        #top-count,
+        #send-all-count {
+          display: none;
         }
       }
       @media (pointer: coarse) {
@@ -1144,37 +1202,36 @@
           </button>
         </div>
       </header>
-      <main class="workspace">
-        <article class="paper markdown" id="document" aria-labelledby="title" aria-busy="false">
-          <div class="empty">Opening Markdown review…</div>
-        </article>
-      </main>
-      <div class="comments-scrim" id="comments-scrim" hidden></div>
-      <div
-        class="comments-panel"
-        id="comments-panel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="comments-title"
-        aria-busy="false"
-        hidden
-      >
-        <div class="comments-head">
-          <h2 class="comments-title" id="comments-title">Comments</h2>
-          <button
-            class="icon-button compact"
-            id="close-comments"
-            type="button"
-            aria-label="Close comments"
-          >
-            <svg class="ui-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <path
-                d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"
-              ></path>
-            </svg>
-          </button>
-        </div>
-        <div class="comments-list" id="comments-list" role="list"></div>
+      <div class="review-layout">
+        <main class="workspace">
+          <article class="paper markdown" id="document" aria-labelledby="title" aria-busy="false">
+            <div class="empty">Opening Markdown review…</div>
+          </article>
+        </main>
+        <aside
+          class="comments-panel"
+          id="comments-panel"
+          aria-labelledby="comments-title"
+          aria-busy="false"
+          hidden
+        >
+          <div class="comments-head">
+            <h2 class="comments-title" id="comments-title">Comments</h2>
+            <button
+              class="icon-button compact"
+              id="close-comments"
+              type="button"
+              aria-label="Close comments"
+            >
+              <svg class="ui-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path
+                  d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"
+                ></path>
+              </svg>
+            </button>
+          </div>
+          <div class="comments-list" id="comments-list" role="list"></div>
+        </aside>
       </div>
     </div>
 

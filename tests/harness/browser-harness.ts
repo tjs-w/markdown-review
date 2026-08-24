@@ -45,7 +45,7 @@ const transport = new StdioClientTransport({
 const client = new Client({ name: "markdown-review-browser-harness", version: "0.1.0" });
 await client.connect(transport);
 
-const resource = await client.readResource({ uri: "ui://markdown-review/v16.html" });
+const resource = await client.readResource({ uri: "ui://markdown-review/v17.html" });
 const resourceContent = resource.contents[0];
 if (!resourceContent || !("text" in resourceContent)) {
   throw new Error("The Markdown Review HTML resource was not returned");
@@ -94,6 +94,7 @@ const hostScript = `<script>
     : null;
   const state = window.__markdownReviewHost = {
     messages: [],
+    sizeChanges: [],
     externalLinks: [],
     toolCalls: [],
     toolResults: [],
@@ -114,7 +115,11 @@ const hostScript = `<script>
     const request = event.data;
     if (event.source !== window || !request || request.jsonrpc !== "2.0" || typeof request.method !== "string") return;
     if (request.id === undefined) {
-      if (request.method === "ui/notifications/initialized" || request.method === "ui/notifications/size-changed") {
+      if (request.method === "ui/notifications/size-changed") {
+        state.sizeChanges.push(request.params);
+        document.documentElement.dataset.lastReportedHeight = String(request.params?.height ?? "");
+        event.stopImmediatePropagation();
+      } else if (request.method === "ui/notifications/initialized") {
         event.stopImmediatePropagation();
       }
       return;
@@ -137,7 +142,9 @@ const hostScript = `<script>
           hostContext: {
             theme: "light",
             displayMode: "inline",
-            availableDisplayModes: ["inline", "fullscreen"]
+            availableDisplayModes: query.get("inline-only") === "1"
+              ? ["inline"]
+              : ["inline", "fullscreen"]
           }
         };
         respond(request.id, result);

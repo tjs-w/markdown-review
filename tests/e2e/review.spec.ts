@@ -26,6 +26,12 @@ function submittedMessageText(messages: readonly unknown[]): string {
   return text;
 }
 
+function submittedReviewEnvelope(message: string): unknown {
+  const match = /\n\n(`{3,})json\n([\s\S]*)\n\1$/u.exec(message);
+  if (match?.[2] === undefined) throw new Error("Expected a fenced review JSON block");
+  return JSON.parse(match[2]) as unknown;
+}
+
 test.beforeEach(async ({ page }) => {
   const externalRequests: string[] = [];
   const browserOrigin = new URL(test.info().project.use.baseURL ?? "http://127.0.0.1:43117").origin;
@@ -89,8 +95,14 @@ test("preserves native selection, queues feedback, and submits one batch", async
     return host?.messages ?? [];
   });
   const submittedText = submittedMessageText(messages);
-  expect(submittedText).toContain("markdown-review/v1");
-  expect(submittedText).toContain('"id": "#1"');
+  expect(submittedText).toContain("Apply each `comment` only to its anchored Markdown passage");
+  expect(submittedReviewEnvelope(submittedText)).toMatchObject({
+    submissionId: expect.any(String),
+    review: {
+      schema: "markdown-review/v1",
+      items: [{ id: "#1", comment: "Clarify this statement while keeping literal #1." }],
+    },
+  });
 });
 
 test("renders the local PNG without network access and passes axe", async ({ page }) => {
@@ -154,7 +166,7 @@ test("does not queue feedback while an IME composition is active", async ({ page
   await expect(page.locator(".annotation-badge")).toHaveText("1");
 });
 
-test("supports a keyboard-only queue, dialog, and submit journey", async ({ page }) => {
+test("supports a keyboard-only queue, comments rail, and submit journey", async ({ page }) => {
   const paragraph = page.locator(".review-block p").first();
   await paragraph.evaluate((element) => {
     const selection = window.getSelection();
@@ -173,9 +185,11 @@ test("supports a keyboard-only queue, dialog, and submit journey", async ({ page
   const commentsToggle = page.locator("#comments-toggle");
   await commentsToggle.focus();
   await page.keyboard.press("Enter");
-  await expect(page.locator("#close-comments")).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
-  await expect(page.locator('[data-comment-action="go"]')).toBeFocused();
+  await expect(commentsToggle).toBeFocused();
+  await expect(commentsToggle).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#comments-panel")).toBeHidden();
+  await page.keyboard.press("Enter");
   await page.keyboard.press("Escape");
   await expect(commentsToggle).toBeFocused();
   const submit = page.locator("#send-all");
@@ -209,6 +223,116 @@ test("isolates the optional Codex widget-state compatibility adapter", async ({ 
   expect(await page.evaluate(() => "openai" in window)).toBe(true);
 });
 
+test("opens a usable intrinsic-height review when fullscreen is unsupported", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 80 });
+  await page.goto("/?inline-only=1");
+  await expect(page.locator("html")).toHaveAttribute("data-surface", "launcher");
+  await page.locator("#open-review").click();
+  await expect(page.locator("html")).toHaveAttribute("data-surface", "review");
+  await expect(page.locator("#toast-message")).toContainText("Opened the review inline");
+  await expect(page.locator("html")).toHaveAttribute("data-last-reported-height", /\d+/);
+  const sizeChanges = await page.evaluate(() => {
+    const host = (
+      window as Window & {
+        __markdownReviewHost?: { sizeChanges: unknown[] };
+      }
+    ).__markdownReviewHost;
+    return host?.sizeChanges ?? [];
+  });
+  const lastSize = sizeChanges.at(-1);
+  if (!lastSize || typeof lastSize !== "object" || Array.isArray(lastSize)) {
+    throw new TypeError("Expected an intrinsic-height notification");
+  }
+  const size = lastSize as Readonly<Record<string, unknown>>;
+  expect(size["width"]).toBeUndefined();
+  expect(size["height"]).toBeGreaterThanOrEqual(640);
+  await page.setViewportSize({ width: 800, height: Number(size["height"]) });
+  await expect(page.locator("#document h1")).toBeVisible();
+});
+
+test("toggles an in-flow comments rail that shrinks rather than overlaps the document", async ({
+  page,
+}) => {
+  await page.goto("/?seed=1&codex=1");
+  const workspace = page.locator(".workspace");
+  const comments = page.locator("#comments-panel");
+  const toggle = page.locator("#comments-toggle");
+  const closedWorkspace = await workspace.boundingBox();
+  if (!closedWorkspace) throw new Error("Expected the review workspace");
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(toggle).toHaveAccessibleName("Hide 1 review comment");
+  await expect(comments).toBeVisible();
+  await expect(comments).not.toHaveAttribute("aria-modal");
+  const openWorkspace = await workspace.boundingBox();
+  const openComments = await comments.boundingBox();
+  if (!openWorkspace || !openComments) throw new Error("Expected split-view geometry");
+  expect(openWorkspace.width).toBeLessThan(closedWorkspace.width);
+  expect(openWorkspace.x + openWorkspace.width).toBeLessThanOrEqual(openComments.x + 1);
+  expect(
+    await page.evaluate(
+      () =>
+        document.querySelector<HTMLElement>(".workspace")?.inert === true ||
+        document.querySelector<HTMLElement>(".topbar")?.inert === true,
+    ),
+  ).toBe(false);
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(toggle).toHaveAccessibleName("Show 1 review comment");
+  await expect(comments).toBeHidden();
+  const reopenedWorkspace = await workspace.boundingBox();
+  expect(reopenedWorkspace?.width).toBeCloseTo(closedWorkspace.width, 0);
+});
+
+test("survives rapid narrow resizing with an open comments rail", async ({ page }) => {
+  await page.goto("/?seed=1&codex=1");
+  await page.locator("#comments-toggle").click();
+  for (const width of [800, 520, 400, 320, 240, 1_440]) {
+    await page.setViewportSize({ width, height: 700 });
+    await expect(page.locator("html")).toHaveAttribute("data-surface", "review");
+    await expect(page.locator("#document")).toBeVisible();
+    await expect(page.locator("#comments-panel")).toBeVisible();
+    const workspaceBox = await page.locator(".workspace").boundingBox();
+    const commentsBox = await page.locator("#comments-panel").boundingBox();
+    if (!workspaceBox || !commentsBox) throw new Error(`Missing layout at ${width}px`);
+    expect(workspaceBox.x + workspaceBox.width).toBeLessThanOrEqual(commentsBox.x + 1);
+    expect(commentsBox.x + commentsBox.width).toBeLessThanOrEqual(width + 1);
+    const topbarButtons = await page.locator(".topbar button").evaluateAll((buttons) =>
+      buttons.map((button) => {
+        const rect = button.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, width: rect.width, height: rect.height };
+      }),
+    );
+    for (const button of topbarButtons) {
+      expect(button.left).toBeGreaterThanOrEqual(-1);
+      expect(button.right).toBeLessThanOrEqual(width + 1);
+      expect(button.width).toBeGreaterThanOrEqual(24);
+      expect(button.height).toBeGreaterThanOrEqual(24);
+    }
+    const overflow = await page.evaluate(() => {
+      const layout = document.querySelector<HTMLElement>(".review-layout");
+      const commentsList = document.querySelector<HTMLElement>("#comments-list");
+      return (
+        document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 ||
+        (layout?.getBoundingClientRect().right ?? 0) > document.documentElement.clientWidth + 1 ||
+        (commentsList?.scrollWidth ?? 0) > (commentsList?.clientWidth ?? 0) + 1
+      );
+    });
+    expect(overflow).toBe(false);
+  }
+
+  await page.setViewportSize({ width: 320, height: 1 });
+  await expect(page.locator("html")).toHaveAttribute("data-surface", "review");
+  expect(
+    await page.locator(".full-surface").evaluate((node) => getComputedStyle(node).display),
+  ).toBe("grid");
+  await page.setViewportSize({ width: 320, height: 700 });
+  await expect(page.locator("#document h1")).toBeVisible();
+  await expect(page.locator("canvas.local-image-canvas")).toBeVisible();
+});
+
 test("reflows at 320 CSS pixels and honors accessibility media", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-display-mode", "fullscreen");
   // A 320 CSS-pixel viewport is the WCAG reflow equivalent of a 1280-pixel
@@ -216,7 +340,7 @@ test("reflows at 320 CSS pixels and honors accessibility media", async ({ page }
   // query evaluation and therefore cannot model browser zoom accurately.
   await page.setViewportSize({ width: 320, height: 640 });
   await page.emulateMedia({ reducedMotion: "reduce", forcedColors: "active" });
-  await expect(page.locator("#title")).toBeVisible();
+  await expect(page.locator("#document h1")).toBeVisible();
   const horizontalOverflow = await page.evaluate(() =>
     [document.documentElement, ...document.querySelectorAll<HTMLElement>(".workspace")].some(
       (element) => element.scrollWidth > element.clientWidth + 1,

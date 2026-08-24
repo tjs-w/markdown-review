@@ -12,6 +12,7 @@ import type { HostContext, HostContextListener, MarkdownReviewPorts } from "./po
 
 const SESSION = "123e4567-e89b-42d3-a456-426614174000";
 const NOW = "2026-08-23T20:00:00.000Z";
+const INITIAL_INNER_HEIGHT = window.innerHeight;
 const reviewDocument: ReviewDocument = {
   kind: "markdown-review-document",
   reviewSessionId: SESSION,
@@ -36,7 +37,7 @@ function installShell(): void {
       <button id="theme-toggle"></button><button id="refresh"></button></div>
     <span id="launcher-meta"></span>
     <aside id="comments-panel" hidden><button id="close-comments"></button><div id="comments-list"></div></aside>
-    <div id="comments-scrim" hidden></div><button id="selection-action" hidden></button><button id="open-review"></button>
+    <button id="selection-action" hidden></button><button id="open-review"></button>
     <main class="workspace"><article class="markdown" id="document"></article></main>
     <section id="review-composer" hidden><h2 id="composer-title"></h2><button id="close-composer"></button>
       <button id="composer-help-toggle"></button><div id="composer-help-popover" hidden></div>
@@ -166,7 +167,11 @@ async function queueComment(feedback: string, blockIndex = 0): Promise<void> {
 
 afterEach(() => {
   document.body.replaceChildren();
-  for (const attribute of ["data-display-mode", "data-theme", "data-surface"])
+  Object.defineProperty(window, "innerHeight", {
+    configurable: true,
+    value: INITIAL_INNER_HEIGHT,
+  });
+  for (const attribute of ["data-comments-open", "data-display-mode", "data-theme", "data-surface"])
     document.documentElement.removeAttribute(attribute);
 });
 
@@ -386,10 +391,21 @@ describe("mountMarkdownReview", () => {
     expect(field.value).toBe("#1");
     field.value = "Build on #1";
     field.dispatchEvent(new Event("input", { bubbles: true }));
-    document.getElementById("comments-toggle")?.click();
+    const commentsToggle = document.getElementById("comments-toggle");
+    commentsToggle?.click();
     expect(comments.hidden).toBeFalse();
+    expect(document.documentElement.dataset["commentsOpen"]).toBe("true");
+    expect(commentsToggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(commentsToggle?.getAttribute("aria-label")).toBe("Hide 1 review comment");
+    expect(document.querySelector<HTMLElement>(".workspace")?.inert).not.toBeTrue();
+    commentsToggle?.click();
+    expect(comments.hidden).toBeTrue();
+    expect(document.documentElement.dataset["commentsOpen"]).toBe("false");
+    expect(commentsToggle?.getAttribute("aria-label")).toBe("Show 1 review comment");
+    commentsToggle?.click();
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(comments.hidden).toBeTrue();
+    expect(document.activeElement).toBe(commentsToggle);
     expect(document.getElementById("review-composer")?.hidden).toBeFalse();
     expect(field.value).toBe("Build on #1");
     field.dispatchEvent(
@@ -451,8 +467,11 @@ describe("mountMarkdownReview", () => {
     expect((document.getElementById("refresh") as HTMLButtonElement).disabled).toBeTrue();
     document.getElementById("open-review")?.click();
     expect(document.getElementById("toast-message")?.textContent).toContain(
-      "Fullscreen is not available",
+      "Opened the review inline",
     );
+    expect(document.documentElement.dataset["surface"]).toBe("review");
+    harness.emitContext({ displayMode: "inline", theme: "light" });
+    expect(document.documentElement.dataset["surface"]).toBe("review");
     harness.emitContext({ displayMode: "fullscreen", theme: "dark" });
     expect(document.documentElement.dataset["theme"]).toBe("dark");
     expect(document.getElementById("theme-toggle")?.getAttribute("aria-label")).toBe(
@@ -490,15 +509,35 @@ describe("mountMarkdownReview", () => {
     const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
     await settle();
     expect(requests).toEqual(["fullscreen"]);
+    expect(document.documentElement.dataset["surface"]).toBe("launcher");
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 1 });
+    window.dispatchEvent(new Event("resize"));
+    expect(document.documentElement.dataset["surface"]).toBe("launcher");
     document.getElementById("open-review")?.click();
     await settle();
     expect(requests).toHaveLength(2);
     expect(document.getElementById("toast-message")?.textContent).toContain(
-      "Could not enter fullscreen",
+      "Opened the review inline",
     );
+    expect(document.documentElement.dataset["surface"]).toBe("review");
+    harness.emitContext({ displayMode: "inline", theme: "light" });
+    expect(document.documentElement.dataset["surface"]).toBe("review");
     await handle.openDocument(reviewDocument);
     await settle();
     expect(requests).toHaveLength(2);
+    handle.destroy();
+  });
+
+  test("keeps a fullscreen document mounted through transient resize measurements", async () => {
+    installShell();
+    const harness = createHarness({ context: { displayMode: "fullscreen", theme: "light" } });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    expect(document.documentElement.dataset["surface"]).toBe("review");
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 1 });
+    window.dispatchEvent(new Event("resize"));
+    expect(document.documentElement.dataset["surface"]).toBe("review");
+    expect(document.querySelector("#document .review-block")).not.toBeNull();
     handle.destroy();
   });
 

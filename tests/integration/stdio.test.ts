@@ -59,7 +59,7 @@ describe("checked-in Node stdio bundle", () => {
         "load_markdown_review_image_chunk",
       ]);
 
-      const resource = await client.readResource({ uri: "ui://markdown-review/v16.html" });
+      const resource = await client.readResource({ uri: "ui://markdown-review/v17.html" });
       const content = resource.contents[0];
       expect(content?.mimeType).toBe("text/html;profile=mcp-app");
       const html = content && "text" in content ? content.text : "";

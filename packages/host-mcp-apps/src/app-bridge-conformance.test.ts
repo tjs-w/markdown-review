@@ -263,4 +263,36 @@ describe("official MCP Apps AppBridge conformance", () => {
     await host.close();
     await bridge.close();
   });
+
+  test("preserves container dimensions and reports inline height without owning host width", async () => {
+    const harness = await createHarness({
+      context: {
+        displayMode: "inline",
+        containerDimensions: { width: 420, height: 96 },
+      },
+    });
+    const sizeChanges: { readonly width?: number; readonly height?: number }[] = [];
+    harness.bridge.addEventListener("sizechange", (params) => {
+      sizeChanges.push(params);
+    });
+
+    expect(harness.host.ports.presentation.getContext().containerDimensions).toEqual({
+      width: 420,
+      height: 96,
+    });
+    harness.host.ports.presentation.notifyIntrinsicHeight?.(63.2);
+    await new Promise<void>((resolve) => {
+      queueMicrotask(resolve);
+    });
+    expect(sizeChanges).toEqual([{ height: 68 }]);
+
+    await harness.bridge.sendHostContextChange({ displayMode: "fullscreen" });
+    harness.host.ports.presentation.notifyIntrinsicHeight?.(900);
+    await new Promise<void>((resolve) => {
+      queueMicrotask(resolve);
+    });
+    expect(sizeChanges).toEqual([{ height: 68 }]);
+
+    await closeHarness(harness);
+  });
 });

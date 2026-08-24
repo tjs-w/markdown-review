@@ -27,6 +27,12 @@ export interface HostContext {
   readonly displayMode: DisplayMode;
   readonly theme: ReviewTheme;
   readonly availableDisplayModes?: readonly DisplayMode[];
+  readonly containerDimensions?: {
+    readonly width?: number | undefined;
+    readonly maxWidth?: number | undefined;
+    readonly height?: number | undefined;
+    readonly maxHeight?: number | undefined;
+  };
   readonly locale?: string;
 }
 
