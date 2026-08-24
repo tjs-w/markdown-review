@@ -1,0 +1,41 @@
+{
+  "name": "codex-markdown-review",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A rendered Markdown review surface for Codex with queued, line-anchored feedback.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tjs-w/codex-markdown-review.git"
+  },
+  "homepage": "https://github.com/tjs-w/codex-markdown-review#readme",
+  "bugs": {
+    "url": "https://github.com/tjs-w/codex-markdown-review/issues"
+  },
+  "keywords": [
+    "codex",
+    "markdown",
+    "mcp",
+    "review"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "esbuild server/src/server.mjs --bundle --platform=node --format=cjs --target=node20 --outfile=server/dist/server.cjs && esbuild web/src/png-decoder.mjs --bundle --platform=browser --format=iife --global-name=MarkdownReviewPng --target=chrome120 --outfile=web/dist/png-decoder.js",
+    "browser:harness": "node scripts/browser-harness.mjs",
+    "pretest": "npm run build",
+    "test": "node scripts/smoke-test.mjs && node scripts/png-decoder-smoke-test.mjs && node scripts/ui-smoke-test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "fast-png": "^8.0.0",
+    "marked": "^18.0.10",
+    "sanitize-html": "^2.17.7",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

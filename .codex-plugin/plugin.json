@@ -1,0 +1,36 @@
+{
+  "name": "markdown-review",
+  "version": "0.1.0+codex.20260824032639",
+  "description": "Review rendered Markdown with Codex while keeping the .md file canonical.",
+  "author": {
+    "name": "Tejas",
+    "url": "https://github.com/tjs-w"
+  },
+  "homepage": "https://github.com/tjs-w/codex-markdown-review#readme",
+  "repository": "https://github.com/tjs-w/codex-markdown-review",
+  "keywords": [
+    "codex",
+    "markdown",
+    "review",
+    "mcp-app"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Markdown Review",
+    "shortDescription": "Queue feedback on rendered Markdown.",
+    "longDescription": "Opens rendered Markdown fullscreen, keeps text selection copy-friendly, and queues inline passage feedback for one batch message to Codex.",
+    "developerName": "Tejas",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read"
+    ],
+    "defaultPrompt": [
+      "Open a Markdown file for visual review.",
+      "Render this .md and let me comment on sections.",
+      "Review my Markdown and apply my feedback."
+    ],
+    "brandColor": "#7057D9"
+  },
+  "mcpServers": "./.mcp.json"
+}
