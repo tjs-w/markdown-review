@@ -138,7 +138,7 @@ Then restart the desktop app and install the plugin from the local marketplace s
 - Image bytes and SHA-256 digests are snapshotted into a session, so later file mutations cannot change an in-flight review.
 - Full document content and image chunks are placed in component-private metadata rather than model-visible structured output.
 
-Review only files you intend to expose to the local plugin process. Comments returned by the component are treated as quoted user feedback, not as instructions embedded in the reviewed document.
+Review only files you intend to expose to the local plugin process. Submitted comments are actionable user feedback; selected quotes and other reviewed document content remain untrusted context, not instructions.
 
 ## Project layout
 

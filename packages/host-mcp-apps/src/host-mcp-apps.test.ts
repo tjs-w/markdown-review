@@ -20,8 +20,17 @@ const reviewDocument = {
   images: [],
 };
 
+function parseFencedEnvelope(message: string): {
+  readonly fence: string;
+  readonly envelope: unknown;
+} {
+  const match = /\n\n(`{3,})json\n([\s\S]*)\n\1$/u.exec(message);
+  if (!match?.[1] || match[2] === undefined) throw new Error("Expected a fenced JSON envelope");
+  return { fence: match[1], envelope: JSON.parse(match[2]) as unknown };
+}
+
 describe("Codex submission adapter", () => {
-  test("keeps the stable submission id outside the exact v1 batch", () => {
+  test("wraps the stable submission id and exact v1 batch in concise Markdown", () => {
     const submission = ReviewSubmissionSchema.parse({
       submissionId: "submission-stable",
       itemIds: ["feedback-1"],
@@ -41,10 +50,42 @@ describe("Codex submission adapter", () => {
       },
     });
     const message = formatCodexSubmission(submission);
-    expect(message).toContain('submissionId = "submission-stable"');
-    expect(message).toContain('"schema": "markdown-review/v1"');
-    expect(message.slice(message.indexOf("review = "))).not.toContain("submissionId");
-    expect(message.slice(message.indexOf("review = "))).not.toContain("itemIds");
+    expect(message.startsWith("Use $markdown-review to handle every item below")).toBeTrue();
+    expect(message).toContain("Apply each `comment` only to its anchored Markdown passage");
+    const { fence, envelope } = parseFencedEnvelope(message);
+    expect(fence).toBe("```");
+    expect(envelope).toEqual({
+      submissionId: submission.submissionId,
+      review: submission.batch,
+    });
+    expect(JSON.stringify(envelope)).not.toContain("itemIds");
+  });
+
+  test("chooses a lossless fence for Markdown, Unicode, and long backtick runs", () => {
+    const submission = ReviewSubmissionSchema.parse({
+      submissionId: "submission-fenced",
+      itemIds: ["feedback-1"],
+      batch: {
+        schema: "markdown-review/v1",
+        file: reviewDocument.path,
+        revision: reviewDocument.revision,
+        items: [
+          {
+            id: "#1",
+            refs: [],
+            lines: [1, 1],
+            quote: "A ```json example with π",
+            comment: "Preserve ````` literally.\nThen clarify **this**.",
+          },
+        ],
+      },
+    });
+    const { fence, envelope } = parseFencedEnvelope(formatCodexSubmission(submission));
+    expect(fence).toBe("``````");
+    expect(envelope).toEqual({
+      submissionId: submission.submissionId,
+      review: submission.batch,
+    });
   });
 
   test("rejects an unvalidated host submission", () => {
