@@ -9,6 +9,7 @@ Markdown Review is a local-first MCP Apps interface for reviewing rendered Markd
 - A fullscreen, GitHub-style Markdown preview in the side panel.
 - Normal text selection and copying, plus a review menu for selected-text, image, and whole-document feedback.
 - Focusable image review targets for pointer, touch, and keyboard comments.
+- Unobtrusive image feedback controls that appear at the image's bottom-right only on hover, keyboard focus, or active touch.
 - Inline comment markers numbered `#1`, `#2`, and so on.
 - A review queue that submits all comments together to avoid conflicting edits.
 - References between queued comments using `#N`; write `\#N` or `` `#N` `` for literal text.

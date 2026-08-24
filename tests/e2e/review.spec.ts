@@ -59,6 +59,77 @@ async function reviewHighlightCount(page: Page): Promise<number> {
   });
 }
 
+type ReviewSelectionDirection = "forward" | "backward";
+
+async function installLongSelectionFixture(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const surface = document.getElementById("document");
+    const imageHeading = [...document.querySelectorAll<HTMLElement>("#document h2")].find(
+      (heading) => heading.textContent === "Images",
+    );
+    const imageBlock = imageHeading?.closest(".review-block");
+    if (!surface || !imageBlock) throw new Error("Expected image section fixture");
+    const fragment = document.createDocumentFragment();
+    for (let index = 0; index < 72; index += 1) {
+      const block = document.createElement("section");
+      block.className = "review-block";
+      block.dataset["startLine"] = String(index + 4);
+      block.dataset["endLine"] = String(index + 4);
+      const paragraph = document.createElement("p");
+      paragraph.textContent = `Long review paragraph ${String(index + 1)} keeps the selection endpoint testable across multiple viewports.`;
+      block.appendChild(paragraph);
+      fragment.appendChild(block);
+    }
+    surface.insertBefore(fragment, imageBlock);
+  });
+}
+
+async function selectLongReviewRange(
+  page: Page,
+  direction: ReviewSelectionDirection,
+): Promise<{ bottom: number; left: number; right: number; top: number }> {
+  const focusText =
+    direction === "forward"
+      ? "Long review paragraph 72 keeps the selection endpoint testable across multiple viewports."
+      : "Select and review this paragraph.";
+  await page.getByText(focusText, { exact: true }).evaluate((element) => {
+    element.scrollIntoView({ block: "center" });
+  });
+  return page.evaluate((selectionDirection) => {
+    const paragraphs = [...document.querySelectorAll<HTMLElement>("#document p")];
+    const start = paragraphs.find(
+      (paragraph) => paragraph.textContent === "Select and review this paragraph.",
+    )?.firstChild;
+    const end = paragraphs.find((paragraph) =>
+      paragraph.textContent.startsWith("Long review paragraph 72 "),
+    )?.firstChild;
+    if (!(start instanceof Text) || !(end instanceof Text)) {
+      throw new Error("Expected long directional-selection fixture");
+    }
+    const selection = window.getSelection();
+    if (!selection) throw new Error("Selection API is unavailable");
+    selection.removeAllRanges();
+    if (selectionDirection === "forward") {
+      selection.setBaseAndExtent(start, 0, end, end.data.length);
+    } else {
+      selection.setBaseAndExtent(end, end.data.length, start, 0);
+    }
+    document.dispatchEvent(new Event("selectionchange"));
+    const range = selection.getRangeAt(0);
+    const fragments = [...range.getClientRects()].filter(
+      (rect) => rect.width > 0 && rect.height > 0,
+    );
+    const endpoint = selectionDirection === "forward" ? fragments.at(-1) : fragments[0];
+    if (!endpoint) throw new Error("Expected a visible selection endpoint fragment");
+    return {
+      top: endpoint.top,
+      right: endpoint.right,
+      bottom: endpoint.bottom,
+      left: endpoint.left,
+    };
+  }, direction);
+}
+
 test.beforeEach(async ({ page }) => {
   const externalRequests: string[] = [];
   const browserOrigin = new URL(test.info().project.use.baseURL ?? "http://127.0.0.1:43117").origin;
@@ -136,6 +207,113 @@ test("preserves native selection, queues feedback, and submits one batch", async
       items: [{ id: "#1", comment: "Clarify this statement while keeping literal #1." }],
     },
   });
+});
+
+test("keeps the selection action at the directional endpoint through scrolling and reflow", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(isMobile, "Directional desktop geometry is covered by every desktop engine");
+  await installLongSelectionFixture(page);
+  await page.setViewportSize({ width: 1100, height: 700 });
+  const action = page.locator("#selection-action");
+  const workspace = page.locator(".workspace");
+
+  const forwardEndpoint = await selectLongReviewRange(page, "forward");
+  await expect(action).toBeVisible();
+  const forwardAction = await action.boundingBox();
+  if (!forwardAction) throw new Error("Expected forward selection action geometry");
+  expect(forwardAction.x).toBeGreaterThanOrEqual(forwardEndpoint.right + 5);
+  expect(forwardAction.y).toBeGreaterThanOrEqual(forwardEndpoint.bottom + 5);
+
+  await workspace.evaluate((element) => {
+    element.scrollTo({ top: 0 });
+  });
+  await expect(action).toBeHidden();
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toContain(
+    "Long review paragraph 72",
+  );
+  await page
+    .getByText(
+      "Long review paragraph 72 keeps the selection endpoint testable across multiple viewports.",
+      {
+        exact: true,
+      },
+    )
+    .scrollIntoViewIfNeeded();
+  await expect(action).toBeVisible();
+
+  const backwardEndpoint = await selectLongReviewRange(page, "backward");
+  await expect(action).toBeVisible();
+  const backwardAction = await action.boundingBox();
+  if (!backwardAction) throw new Error("Expected backward selection action geometry");
+  expect(backwardAction.x + backwardAction.width).toBeLessThanOrEqual(backwardEndpoint.left - 5);
+  expect(backwardAction.y + backwardAction.height).toBeLessThanOrEqual(backwardEndpoint.top - 5);
+
+  await workspace.evaluate((element) => {
+    const startParagraph = [...document.querySelectorAll<HTMLElement>("#document p")].find(
+      (paragraph) => paragraph.textContent === "Select and review this paragraph.",
+    );
+    if (!startParagraph) throw new Error("Expected reverse selection endpoint");
+    const workspaceRect = element.getBoundingClientRect();
+    const paragraphRect = startParagraph.getBoundingClientRect();
+    element.scrollBy({ top: paragraphRect.top - workspaceRect.top - 2 });
+  });
+  await expect(action).toBeVisible();
+  const [toolbarBox, workspaceBox, toolbarSafeAction] = await Promise.all([
+    page.locator(".topbar").boundingBox(),
+    workspace.boundingBox(),
+    action.boundingBox(),
+  ]);
+  if (!toolbarBox || !workspaceBox || !toolbarSafeAction) {
+    throw new Error("Expected toolbar collision geometry");
+  }
+  expect(toolbarSafeAction.y).toBeGreaterThanOrEqual(workspaceBox.y + 7);
+  expect(toolbarSafeAction.y).toBeGreaterThanOrEqual(toolbarBox.y + toolbarBox.height);
+
+  await page
+    .getByText(
+      "Long review paragraph 72 keeps the selection endpoint testable across multiple viewports.",
+      { exact: true },
+    )
+    .scrollIntoViewIfNeeded();
+  await expect(action).toBeHidden();
+  await page
+    .getByText("Select and review this paragraph.", { exact: true })
+    .scrollIntoViewIfNeeded();
+  await expect(action).toBeVisible();
+
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page
+    .getByText("Select and review this paragraph.", { exact: true })
+    .scrollIntoViewIfNeeded();
+  await expect(action).toBeVisible();
+  const reflowedAction = await action.boundingBox();
+  if (!reflowedAction) throw new Error("Expected reflowed selection action geometry");
+  expect(reflowedAction.x).toBeGreaterThanOrEqual(7);
+  expect(reflowedAction.y).toBeGreaterThanOrEqual(7);
+  expect(reflowedAction.x + reflowedAction.width).toBeLessThanOrEqual(313);
+  expect(reflowedAction.y + reflowedAction.height).toBeLessThanOrEqual(633);
+
+  const selectedTextBeforeComposer = await page.evaluate(() => window.getSelection()?.toString());
+  await action.click();
+  await expect(page.locator("#review-composer")).toBeVisible();
+  await expect(action).toBeHidden();
+  await expect(page.locator("#quote")).toContainText("Select and review this paragraph.");
+  const backwardComposerState = await page.evaluate(() => {
+    const endParagraph = [...document.querySelectorAll<HTMLElement>("#document p")].find(
+      (paragraph) => paragraph.textContent.startsWith("Long review paragraph 72 "),
+    );
+    const endBlock = endParagraph?.closest(".review-block");
+    const composer = document.getElementById("review-composer");
+    return {
+      afterNormalizedEnd: endBlock?.nextElementSibling === composer,
+      selection: window.getSelection()?.toString() ?? "",
+    };
+  });
+  expect(backwardComposerState.afterNormalizedEnd).toBe(true);
+  expect(["", selectedTextBeforeComposer]).toContain(backwardComposerState.selection);
+  expect(backwardComposerState.selection).not.toContain("Add feedback");
 });
 
 test("suppresses the host menu, copies source text, and queues whole-document feedback", async ({
@@ -361,6 +539,49 @@ test("renders PNG, JPEG, and static WebP without network access and passes axe",
   expect(darkResults.violations).toEqual([]);
 });
 
+test("reveals the image feedback affordance only at the bottom-right interaction point", async ({
+  page,
+  isMobile,
+}) => {
+  const png = page.getByRole("button", { name: "Add feedback for image: PNG pixel" });
+  await expect(png).toBeVisible();
+  const pseudoStyle = () =>
+    png.evaluate((element) => {
+      const style = getComputedStyle(element, "::after");
+      return {
+        bottom: style.bottom,
+        opacity: style.opacity,
+        right: style.right,
+        visibility: style.visibility,
+      };
+    });
+  await expect.poll(async () => (await pseudoStyle()).opacity).toBe("0");
+  await expect.poll(async () => (await pseudoStyle()).visibility).toBe("hidden");
+  expect(await pseudoStyle()).toMatchObject({ bottom: "8px", right: "8px" });
+
+  if (isMobile) {
+    await png.tap();
+    await expect(page.locator("#review-composer")).toBeVisible();
+    await expect.poll(async () => (await pseudoStyle()).opacity).toBe("0");
+    await expect.poll(async () => (await pseudoStyle()).visibility).toBe("hidden");
+    return;
+  }
+
+  await png.hover();
+  await expect.poll(async () => (await pseudoStyle()).opacity).toBe("1");
+  await expect.poll(async () => (await pseudoStyle()).visibility).toBe("visible");
+  await page.locator(".topbar").hover();
+  await expect.poll(async () => (await pseudoStyle()).opacity).toBe("0");
+  await expect.poll(async () => (await pseudoStyle()).visibility).toBe("hidden");
+
+  await page.locator("#document").focus();
+  await page.keyboard.press("Tab");
+  await png.focus();
+  await expect(png).toBeFocused();
+  await expect.poll(async () => (await pseudoStyle()).opacity).toBe("1");
+  await expect.poll(async () => (await pseudoStyle()).visibility).toBe("visible");
+});
+
 test("comments on images with pointer and keyboard and restores the target highlight", async ({
   page,
 }) => {
@@ -376,6 +597,9 @@ test("comments on images with pointer and keyboard and restores the target highl
   await page.locator("#feedback").press("Enter");
   await expect(png).toHaveClass(/has-comments/);
   await expect(page.locator(".annotation-badge")).toHaveCount(1);
+  await expect
+    .poll(async () => png.evaluate((element) => getComputedStyle(element, "::after").opacity))
+    .toBe("0");
   expect(await reviewHighlightCount(page)).toBe(0);
 
   await page.reload();
@@ -385,6 +609,11 @@ test("comments on images with pointer and keyboard and restores the target highl
   });
   await expect(restoredPng).toHaveClass(/has-comments/);
   await expect(page.locator(".annotation-badge")).toHaveCount(1);
+  await expect
+    .poll(async () =>
+      restoredPng.evaluate((element) => getComputedStyle(element, "::after").opacity),
+    )
+    .toBe("0");
   await page.locator("#comments-toggle").click();
   await expect(page.getByRole("button", { name: "Go to image for comment 1" })).toBeVisible();
   await page.keyboard.press("Escape");

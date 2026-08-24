@@ -523,8 +523,8 @@
       }
       .image-review-target::after {
         position: absolute;
-        top: 0;
-        right: 0;
+        right: 8px;
+        bottom: 8px;
         display: grid;
         place-items: center;
         width: 24px;
@@ -539,16 +539,35 @@
         font-size: 18px;
         font-weight: 650;
         line-height: 1.2;
-        opacity: 0.84;
+        opacity: 0;
         pointer-events: none;
+        transform: scale(0.86);
         transition:
           opacity 120ms ease,
-          border-color 120ms ease;
+          transform 120ms ease,
+          visibility 0s linear 120ms;
+        visibility: hidden;
       }
-      .image-review-target:hover::after,
-      .image-review-target:focus-visible::after {
+      @media (hover: hover) and (pointer: fine) {
+        .image-review-target:hover::after {
+          visibility: visible;
+          border-color: var(--accent);
+          background: var(--accent);
+          color: var(--on-accent);
+          opacity: 1;
+          transform: scale(1);
+          transition-delay: 0s;
+        }
+      }
+      .image-review-target:focus-visible::after,
+      .image-review-target:active::after {
+        visibility: visible;
         border-color: var(--accent);
+        background: var(--accent);
+        color: var(--on-accent);
         opacity: 1;
+        transform: scale(1);
+        transition-delay: 0s;
       }
       .image-review-target:focus-visible,
       .image-review-target.is-selected {
@@ -558,13 +577,6 @@
       .image-review-target.has-comments {
         background: var(--review-highlight-bg);
         box-shadow: 0 0 0 3px var(--review-highlight-edge);
-      }
-      .image-review-target.has-comments::after {
-        border-color: var(--review-highlight-edge);
-        background: var(--review-highlight-bg);
-        color: var(--review-highlight-fg);
-        content: "✓";
-        font-size: 14px;
       }
       .image-review-target canvas.local-image-canvas {
         display: block;

@@ -24,6 +24,7 @@ All notable changes to this project will be documented here.
 - Updated the component resource cache key to `ui://markdown-review/v22.html` and replaced the aggregate decoded-pixel admission failure with fair, bounded browser raster allocation so every valid image reference remains visible.
 - Updated the component resource cache key to `ui://markdown-review/v23.html`, refined queued-text highlights, kept adjacent headings out of boundary selections, and excluded inserted review UI from native highlight ranges.
 - Updated the component resource cache key to `ui://markdown-review/v24.html`, added an accessible review context menu with exact selected-text copy and whole-document feedback, and gated the native DevTools menu behind `MARKDOWN_REVIEW_DEVTOOLS=1` plus `Shift+right-click`.
+- Updated the component resource cache key to `ui://markdown-review/v25.html`, moved image feedback affordances to a hover/focus-only bottom-right overlay, and kept directional text-selection actions attached to their focus endpoint across scrolling and reflow.
 - Added durable, eye-comfortable selected-text highlights for queued comments in light, dark, and forced-color themes, including exact duplicate-text anchors and safe stale relocation.
 - Removed legacy model-visible widget-state publication and shortened the fenced, injection-resistant Codex submission prompt.
 - Fixed Submit in Codex by accepting the host's standard empty `message` capability object.

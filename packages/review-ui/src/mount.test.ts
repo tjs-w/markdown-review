@@ -475,6 +475,29 @@ describe("mountMarkdownReview", () => {
     handle.destroy();
   });
 
+  test("preserves a pending selection across scroll and keeps its action hidden in the composer", async () => {
+    installShell();
+    const harness = createHarness();
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    selectText();
+    window.dispatchEvent(new Event("scroll"));
+    await settle();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        ctrlKey: true,
+        key: "m",
+        shiftKey: true,
+      }),
+    );
+    expect(document.getElementById("review-composer")?.hidden).toBe(false);
+    expect(document.getElementById("quote")?.textContent).toBe("First paragraph for review.");
+    await settle();
+    expect(document.getElementById("selection-action")?.hidden).toBe(true);
+    handle.destroy();
+  });
+
   test("supports keyboard menu navigation and whole-document feedback persistence", async () => {
     installShell();
     const harness = createHarness({ submit: () => Promise.resolve() });

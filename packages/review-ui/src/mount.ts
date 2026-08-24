@@ -47,6 +47,8 @@ interface ActiveSelection extends ReviewSelection {
   readonly block: HTMLElement;
 }
 
+type SelectionDirection = "forward" | "backward";
+
 interface ContextMenuSnapshot {
   readonly selection: ActiveSelection | null;
   readonly copyText: string | null;
@@ -276,6 +278,10 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   #round: ReviewRoundState;
   #pendingSelection: ActiveSelection | null = null;
   #selectionCopyText: string | null = null;
+  #selectionRange: Range | null = null;
+  #selectionDirection: SelectionDirection = "forward";
+  #selectionFrame: number | undefined;
+  #selectionFrameNeedsCapture = false;
   #secondarySelection: ContextMenuSnapshot | null = null;
   #contextSelection: ActiveSelection | null = null;
   #contextCopyText: string | null = null;
@@ -337,6 +343,10 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#unsubscribePresentation();
     clearReviewHighlights(this.#element("document"));
     this.#closeContextMenu(false);
+    if (this.#selectionFrame !== undefined) {
+      this.#view.cancelAnimationFrame(this.#selectionFrame);
+      this.#selectionFrame = undefined;
+    }
     if (this.#toastTimer !== undefined) clearTimeout(this.#toastTimer);
   }
 
@@ -906,19 +916,144 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#updateComposerActions();
   }
 
+  #clearPendingSelection(): void {
+    this.#pendingSelection = null;
+    this.#selectionCopyText = null;
+    this.#selectionRange = null;
+    this.#element("selection-action").hidden = true;
+  }
+
+  #nativeSelectionDirection(nativeSelection: Selection, range: Range): SelectionDirection {
+    if (
+      nativeSelection.focusNode === range.startContainer &&
+      nativeSelection.focusOffset === range.startOffset
+    ) {
+      return "backward";
+    }
+    if (
+      nativeSelection.focusNode === range.endContainer &&
+      nativeSelection.focusOffset === range.endOffset
+    ) {
+      return "forward";
+    }
+    if (!nativeSelection.focusNode) return "forward";
+    try {
+      const focus = range.cloneRange();
+      focus.setStart(nativeSelection.focusNode, nativeSelection.focusOffset);
+      focus.collapse(true);
+      return range.compareBoundaryPoints(0, focus) === 0 ? "backward" : "forward";
+    } catch {
+      return "forward";
+    }
+  }
+
+  #selectionEndpointRect(range: Range): DOMRect | null {
+    const fragments = Array.from(range.getClientRects()).filter(
+      (rect) =>
+        Number.isFinite(rect.left) &&
+        Number.isFinite(rect.top) &&
+        rect.width > 0 &&
+        rect.height > 0,
+    );
+    const endpoint = this.#selectionDirection === "backward" ? fragments[0] : fragments.at(-1);
+    if (endpoint) return endpoint;
+    const fallback = range.getBoundingClientRect();
+    return Number.isFinite(fallback.left) &&
+      Number.isFinite(fallback.top) &&
+      fallback.width > 0 &&
+      fallback.height > 0
+      ? fallback
+      : null;
+  }
+
+  #positionSelectionAction(): void {
+    const button = this.#element<HTMLButtonElement>("selection-action");
+    if (
+      !this.#pendingSelection ||
+      !this.#selectionRange ||
+      !this.#element("review-composer").hidden
+    ) {
+      button.hidden = true;
+      return;
+    }
+    const rect = this.#selectionEndpointRect(this.#selectionRange);
+    if (!rect) {
+      button.hidden = true;
+      return;
+    }
+    const viewportWidth = this.#view.innerWidth;
+    const viewportHeight = this.#view.innerHeight;
+    const workspace = this.#root.querySelector<HTMLElement>(".workspace");
+    const workspaceRect = workspace?.getBoundingClientRect();
+    const visibleLeft =
+      workspaceRect && workspaceRect.width > 0 ? Math.max(0, workspaceRect.left) : 0;
+    const visibleTop =
+      workspaceRect && workspaceRect.height > 0 ? Math.max(0, workspaceRect.top) : 0;
+    const visibleRight =
+      workspaceRect && workspaceRect.width > 0
+        ? Math.min(viewportWidth, workspaceRect.right)
+        : viewportWidth;
+    const visibleBottom =
+      workspaceRect && workspaceRect.height > 0
+        ? Math.min(viewportHeight, workspaceRect.bottom)
+        : viewportHeight;
+    if (
+      rect.bottom <= visibleTop ||
+      rect.top >= visibleBottom ||
+      rect.right <= visibleLeft ||
+      rect.left >= visibleRight
+    ) {
+      button.hidden = true;
+      return;
+    }
+    const gutter = 8;
+    const gap = 7;
+    const width = button.offsetWidth || 32;
+    const height = button.offsetHeight || 32;
+    const minimumLeft = visibleLeft + gutter;
+    const minimumTop = visibleTop + gutter;
+    const maximumLeft = Math.max(minimumLeft, visibleRight - width - gutter);
+    const maximumTop = Math.max(minimumTop, visibleBottom - height - gutter);
+    let left: number;
+    let top: number;
+    if (this.#selectionDirection === "backward") {
+      left = rect.left - width - gap;
+      top = rect.top - height - gap;
+      if (left < minimumLeft) left = rect.right + gap;
+      if (top < minimumTop) top = rect.bottom + gap;
+    } else {
+      left = rect.right + gap;
+      top = rect.bottom + gap;
+      if (left > maximumLeft) left = rect.left - width - gap;
+      if (top > maximumTop) top = rect.top - height - gap;
+    }
+    button.style.left = `${Math.max(minimumLeft, Math.min(maximumLeft, left))}px`;
+    button.style.top = `${Math.max(minimumTop, Math.min(maximumTop, top))}px`;
+    button.hidden = false;
+  }
+
+  #scheduleSelectionAction(capture: boolean): void {
+    this.#selectionFrameNeedsCapture ||= capture;
+    if (this.#selectionFrame !== undefined) return;
+    this.#selectionFrame = this.#view.requestAnimationFrame(() => {
+      this.#selectionFrame = undefined;
+      if (this.#destroyed) return;
+      const needsCapture = this.#selectionFrameNeedsCapture;
+      this.#selectionFrameNeedsCapture = false;
+      if (needsCapture) this.#captureSelection();
+      else this.#positionSelectionAction();
+    });
+  }
+
   #captureSelection(): void {
     const nativeSelection = this.#view.getSelection?.();
     if (!nativeSelection || nativeSelection.isCollapsed || nativeSelection.rangeCount === 0) {
-      this.#pendingSelection = null;
-      this.#selectionCopyText = null;
-      this.#element("selection-action").hidden = true;
+      this.#clearPendingSelection();
       return;
     }
     const nativeQuote = nativeSelection.toString().trim();
     if (!nativeQuote) {
-      this.#pendingSelection = null;
-      this.#selectionCopyText = null;
-      this.#element("selection-action").hidden = true;
+      this.#clearPendingSelection();
       return;
     }
     const range = nativeSelection.getRangeAt(0);
@@ -931,46 +1066,50 @@ class MarkdownReviewController implements MarkdownReviewHandle {
         ? range.endContainer
         : range.endContainer.parentElement;
     if (!(startNode instanceof this.#view.Element) || !(endNode instanceof this.#view.Element)) {
-      this.#pendingSelection = null;
-      this.#selectionCopyText = null;
-      this.#element("selection-action").hidden = true;
+      this.#clearPendingSelection();
       return;
     }
     const captured = captureReviewTextAnchor(this.#element("document"), range);
     if (!captured) {
-      this.#pendingSelection = null;
-      this.#selectionCopyText = null;
-      this.#element("selection-action").hidden = true;
+      this.#clearPendingSelection();
       return;
     }
     const startBlock = captured.startBlock;
     const endBlock = captured.endBlock;
-    if (!startBlock || !endBlock || !this.#element("document").contains(startBlock)) {
-      this.#pendingSelection = null;
-      this.#selectionCopyText = null;
-      this.#element("selection-action").hidden = true;
+    if (
+      !startBlock ||
+      !endBlock ||
+      !this.#element("document").contains(startBlock) ||
+      !this.#element("document").contains(endBlock)
+    ) {
+      this.#clearPendingSelection();
       return;
     }
     const startLine = Number(startBlock.dataset["startLine"]);
     const endLine = Number(endBlock.dataset["endLine"]);
     if (!Number.isSafeInteger(startLine) || !Number.isSafeInteger(endLine)) {
-      this.#pendingSelection = null;
-      this.#selectionCopyText = null;
-      this.#element("selection-action").hidden = true;
+      this.#clearPendingSelection();
       return;
     }
     const quote = captured.quote.slice(0, 1400);
     this.#selectionCopyText = captured.quote;
-    const rect = range.getBoundingClientRect();
-    const blockRect = endBlock.getBoundingClientRect();
+    this.#selectionRange = range.cloneRange();
+    this.#selectionDirection = this.#nativeSelectionDirection(nativeSelection, range);
+    const endpointRect = this.#selectionEndpointRect(range) ?? range.getBoundingClientRect();
+    const blockRect = startBlock.getBoundingClientRect();
     this.#pendingSelection = {
       startLine,
       endLine,
       anchorX: clamp(
-        (rect.left + rect.width / 2 - blockRect.left) / Math.max(1, blockRect.width),
+        (endpointRect.left + endpointRect.width / 2 - blockRect.left) /
+          Math.max(1, blockRect.width),
         0.96,
       ),
-      anchorY: clamp((rect.bottom - blockRect.top) / Math.max(1, blockRect.height), 1),
+      anchorY: clamp(
+        (endpointRect.top + endpointRect.height / 2 - blockRect.top) /
+          Math.max(1, blockRect.height),
+        1,
+      ),
       quote,
       ...(captured.quote.length <= 1400 ? { textAnchor: captured.textAnchor } : {}),
       block: endBlock,
@@ -980,9 +1119,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       "aria-label",
       `Add feedback for selection, ${lineLabel(this.#pendingSelection)}`,
     );
-    button.style.left = `${Math.max(8, Math.min(this.#view.innerWidth - 42, rect.left + rect.width / 2 - 17))}px`;
-    button.style.top = `${Math.max(8, Math.min(this.#view.innerHeight - 44, rect.bottom + 7))}px`;
-    button.hidden = false;
+    this.#positionSelectionAction();
     const announcement = `${lineLabel(this.#pendingSelection)}\n${this.#pendingSelection.quote}`;
     if (announcement !== this.#lastSelectionAnnouncement) {
       this.#lastSelectionAnnouncement = announcement;
@@ -1189,9 +1326,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       imageId,
       block,
     };
-    this.#pendingSelection = null;
-    this.#selectionCopyText = null;
-    this.#element("selection-action").hidden = true;
+    this.#clearPendingSelection();
     this.#view.getSelection?.()?.removeAllRanges();
     this.#lastSelectionAnnouncement = `${lineLabel(selection)}\n${selection.quote}`;
     this.#element("selection-status").textContent =
@@ -1876,6 +2011,8 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     );
     this.#closeContextMenu(false);
     this.#closeComposer(false, false);
+    this.#clearPendingSelection();
+    this.#view.getSelection?.()?.removeAllRanges();
     const surface = this.#element("document");
     clearReviewHighlights(surface);
     if (reviewDocument.html) {
@@ -2032,9 +2169,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       "scroll",
       () => {
         this.#closeContextMenu(false);
-        this.#pendingSelection = null;
-        this.#selectionCopyText = null;
-        this.#element("selection-action").hidden = true;
+        this.#scheduleSelectionAction(false);
       },
       { capture: true, passive: true, signal },
     );
@@ -2042,6 +2177,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       "resize",
       () => {
         this.#closeContextMenu(false);
+        this.#scheduleSelectionAction(false);
       },
       { passive: true, signal },
     );
@@ -2049,6 +2185,13 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       "selectionchange",
       () => {
         this.#captureSelection();
+      },
+      { signal },
+    );
+    this.#root.addEventListener(
+      "pointerup",
+      () => {
+        this.#scheduleSelectionAction(true);
       },
       { signal },
     );
