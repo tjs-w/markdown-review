@@ -51,8 +51,8 @@ function createHarness(
           getContext() {
             if (!canvasAvailable) return null;
             return {
-              drawImage(value: unknown) {
-                draws.push(value);
+              drawImage(...values: unknown[]) {
+                draws.push(values);
               },
               getImageData() {
                 return { data: pixels };
@@ -82,6 +82,46 @@ describe("native browser image decoder", () => {
     expect(harness.draws).toHaveLength(1);
     expect(harness.closed.count).toBe(1);
     expect(harness.canvases[0]).toMatchObject({ width: 0, height: 0 });
+  });
+
+  test("validates source dimensions and returns a bounded review raster", async () => {
+    const pixels = new Uint8ClampedArray(2 * 2 * 4);
+    const harness = createHarness(4, 4, pixels);
+    const decoded = await harness.decoder.decode(new Uint8Array(), "image/png", {
+      expectedWidth: 4,
+      expectedHeight: 4,
+      outputWidth: 2,
+      outputHeight: 2,
+    });
+    expect(decoded).toEqual({ width: 2, height: 2, data: pixels });
+    expect(harness.draws[0]).toEqual([expect.anything(), 0, 0, 2, 2]);
+    expect(harness.closed.count).toBe(1);
+
+    const mismatch = createHarness(4, 4, pixels);
+    expect(
+      await rejectionMessage(
+        mismatch.decoder.decode(new Uint8Array(), "image/png", {
+          expectedWidth: 5,
+          expectedHeight: 4,
+          outputWidth: 2,
+          outputHeight: 2,
+        }),
+      ),
+    ).toMatch(/did not match/);
+    expect(mismatch.closed.count).toBe(1);
+
+    const upscale = createHarness(4, 4, pixels);
+    expect(
+      await rejectionMessage(
+        upscale.decoder.decode(new Uint8Array(), "image/png", {
+          expectedWidth: 4,
+          expectedHeight: 4,
+          outputWidth: 5,
+          outputHeight: 4,
+        }),
+      ),
+    ).toMatch(/raster dimensions exceed/);
+    expect(upscale.closed.count).toBe(1);
   });
 
   test("returns the browser pixel buffer without retaining a duplicate copy", async () => {

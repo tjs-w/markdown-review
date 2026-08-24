@@ -39455,7 +39455,6 @@ var MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
 var MAX_INLINE_IMAGE_TOTAL_BYTES = 12 * 1024 * 1024;
 var MAX_INLINE_IMAGE_REFERENCES = 64;
 var MAX_INLINE_IMAGES = MAX_INLINE_IMAGE_REFERENCES;
-var MAX_INLINE_IMAGE_TOTAL_PIXELS = 24e6;
 var IMAGE_CHUNK_BYTES = 24 * 1024;
 var MAX_IMAGE_CHUNKS = Math.ceil(MAX_INLINE_IMAGE_BYTES / IMAGE_CHUNK_BYTES);
 var MAX_BASE64_CHUNK_LENGTH = Math.ceil(IMAGE_CHUNK_BYTES / 3) * 4;
@@ -39521,15 +39520,8 @@ var ReviewDocumentSchema = ReviewDocumentSummarySchema.extend({
     imageIds.add(image.id);
   }
   const totalBytes = document2.images.reduce((total, image) => total + image.byteLength, 0);
-  const totalPixels = document2.images.reduce(
-    (total, image) => total + image.width * image.height,
-    0
-  );
   if (totalBytes > MAX_INLINE_IMAGE_TOTAL_BYTES) {
     context.addIssue({ code: "custom", message: "The document exceeds the image byte limit" });
-  }
-  if (totalPixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
-    context.addIssue({ code: "custom", message: "The document exceeds the image pixel limit" });
   }
 });
 var ErrorReviewDocumentSchema = external_exports.object({
@@ -41332,11 +41324,6 @@ async function snapshotImage(source, alt, markdownPath, budget, pathPolicy) {
     const imagePath = await pathPolicy.resolveLocalImagePath(markdownPath, source);
     const existing = budget.snapshotsByPath.get(imagePath);
     if (existing) {
-      const pixels2 = existing.descriptor.width * existing.descriptor.height;
-      if (budget.totalPixels + pixels2 > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
-        throw new Error("the document exceeds the decoded image limit");
-      }
-      budget.totalPixels += pixels2;
       return imagePlaceholder(alt, existing);
     }
     const snapshot = await readFileHandleBounded(
@@ -41353,18 +41340,11 @@ async function snapshotImage(source, alt, markdownPath, budget, pathPolicy) {
     const sha256 = (0, import_node_crypto.createHash)("sha256").update(snapshot.bytes).digest("hex");
     const duplicate = budget.snapshotsByDigest.get(sha256);
     if (duplicate) {
-      if (budget.totalPixels + pixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
-        throw new Error("the document exceeds the decoded image limit");
-      }
       budget.snapshotsByPath.set(imagePath, duplicate);
-      budget.totalPixels += pixels;
       return imagePlaceholder(alt, duplicate);
     }
     if (budget.totalBytes + snapshot.sizeBytes > MAX_INLINE_IMAGE_TOTAL_BYTES) {
       throw new Error("the document exceeds the review image-size limit");
-    }
-    if (budget.totalPixels + pixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
-      throw new Error("the document exceeds the decoded image limit");
     }
     const id = `local-image-${budget.items.length + 1}`;
     const descriptor = {
@@ -41382,7 +41362,6 @@ async function snapshotImage(source, alt, markdownPath, budget, pathPolicy) {
     budget.snapshotsByPath.set(imagePath, stored);
     budget.snapshotsByDigest.set(sha256, stored);
     budget.totalBytes += snapshot.sizeBytes;
-    budget.totalPixels += pixels;
     return imagePlaceholder(alt, stored);
   } catch (error51) {
     const reason = error51 instanceof Error ? error51.message : "the local file could not be loaded";
@@ -41434,8 +41413,7 @@ async function renderMarkdown(markdown, markdownPath, pathPolicy) {
     snapshotsByPath: /* @__PURE__ */ new Map(),
     snapshotsByDigest: /* @__PURE__ */ new Map(),
     references: 0,
-    totalBytes: 0,
-    totalPixels: 0
+    totalBytes: 0
   };
   let cursor = 0;
   let cursorLine = 1;
@@ -51214,7 +51192,7 @@ var EMPTY_COMPLETION_RESULT = {
 };
 
 // packages/mcp-server/src/server.ts
-var MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v21.html";
+var MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v22.html";
 var REVIEW_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
 var SERVER_INSTRUCTIONS = "Use open_markdown_review only to render an absolute .md or .markdown path. The Markdown file is canonical. Review comments have stable #N serials within one queued review round and may reference earlier queued comments by serial; treat #N as a reference only when the feedback payload explicitly lists it as one, because literal #N text is supported. The component submits the full queue as one batch, clears it after a successful submission, and restarts numbering at #1. Discuss question-only items without editing, apply explicit change requests with normal filesystem tools, then reopen the review after any edits.";
 function errorMessage(error51) {

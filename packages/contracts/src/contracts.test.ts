@@ -221,6 +221,16 @@ describe("portable review contracts", () => {
         images: [{ ...firstImage, id: "image-1", revision: "i1" }],
       }).success,
     ).toBe(true);
+
+    expect(
+      ReviewDocumentSchema.safeParse({
+        ...document,
+        images: [
+          { ...firstImage, width: 4_000, height: 4_000 },
+          { ...secondImage, width: 4_000, height: 4_000 },
+        ],
+      }).success,
+    ).toBe(true);
   });
 
   test("rejects malformed persisted state at the contract boundary", () => {

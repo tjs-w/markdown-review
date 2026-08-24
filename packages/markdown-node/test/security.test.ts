@@ -395,6 +395,21 @@ describe("filesystem and image trust boundaries", () => {
     );
   });
 
+  test("renders every valid reference when source dimensions exceed the browser raster budget", async () => {
+    const directory = await temporaryDirectory();
+    const markdown = join(directory, "review.md");
+    await writeFile(join(directory, "large.jpg"), jpegFixture(4_000, 4_000));
+    await writeFile(
+      markdown,
+      ["# Review", "![First](large.jpg)", "![Second](large.jpg)"].join("\n\n"),
+    );
+
+    const opened = await new MarkdownReviewService().open(markdown);
+    expect(opened.document.images).toHaveLength(1);
+    expect(opened.document.html.match(/data-local-image-id="local-image-1"/g)).toHaveLength(2);
+    expect(opened.document.html).not.toContain("decoded image limit");
+  });
+
   test("deduplicates byte-identical snapshots across paths and preserves detected MIME types", async () => {
     const directory = await temporaryDirectory();
     const markdown = join(directory, "review.md");

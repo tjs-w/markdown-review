@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   MAX_INLINE_IMAGE_REFERENCES,
+  MAX_INLINE_IMAGE_TOTAL_PIXELS,
   type PersistedReviewState,
   type PrivateReviewImageChunk,
   type QueuedFeedback,
@@ -984,7 +985,7 @@ describe("mountMarkdownReview", () => {
     }
   });
 
-  test("enforces reference and rendered-pixel budgets on untrusted document HTML", async () => {
+  test("enforces the reference limit and shares the raster budget across every valid image", async () => {
     installShell();
     const originalInnerHeight = Object.getOwnPropertyDescriptor(window, "innerHeight");
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 200 });
@@ -1029,12 +1030,27 @@ describe("mountMarkdownReview", () => {
         revision: "pixel-budget",
         html:
           '<section class="review-block" data-start-line="1" data-end-line="1">' +
-          '<span class="local-image" data-local-image-id="local-image-1" data-alt="Large one"></span>' +
-          '<span class="local-image" data-local-image-id="local-image-1" data-alt="Large two"></span></section>',
+          Array.from(
+            { length: MAX_INLINE_IMAGE_REFERENCES },
+            (_, index) =>
+              `<span class="local-image" data-local-image-id="local-image-1" data-alt="Large ${index + 1}"></span>`,
+          ).join("") +
+          "</section>",
         images: [{ ...descriptor, width: 4_000, height: 4_000 }],
       });
-      expect(document.querySelectorAll('[data-image-approved="true"]')).toHaveLength(1);
-      expect(document.querySelector(".is-error")?.textContent).toContain("decoded image limit");
+      const approved = [...document.querySelectorAll<HTMLElement>('[data-image-approved="true"]')];
+      expect(approved).toHaveLength(MAX_INLINE_IMAGE_REFERENCES);
+      const rasterPixels = approved.reduce(
+        (total, placeholder) =>
+          total +
+          Number(placeholder.dataset["rasterWidth"]) * Number(placeholder.dataset["rasterHeight"]),
+        0,
+      );
+      expect(rasterPixels).toBeLessThanOrEqual(MAX_INLINE_IMAGE_TOTAL_PIXELS);
+      expect(approved.every((placeholder) => Number(placeholder.dataset["rasterWidth"]) > 0)).toBe(
+        true,
+      );
+      expect(document.querySelector(".is-error")).toBeNull();
     } finally {
       handle.destroy();
       if (originalInnerHeight) Object.defineProperty(window, "innerHeight", originalInnerHeight);

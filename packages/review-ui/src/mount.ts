@@ -52,12 +52,65 @@ interface ActiveLoad {
   readonly promise: Promise<boolean>;
 }
 
+interface RasterCandidate {
+  readonly placeholder: HTMLElement;
+  readonly image: ReviewImageDescriptor;
+  readonly pixels: number;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 function clamp(value: number, fallback: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback;
+}
+
+function allocateRasterPixelBudgets(pixelCounts: readonly number[]): number[] {
+  const allocations = new Array<number>(pixelCounts.length).fill(0);
+  const ordered = pixelCounts
+    .map((pixels, index) => ({ index, pixels }))
+    .sort((left, right) => left.pixels - right.pixels);
+  let remainingPixels = MAX_INLINE_IMAGE_TOTAL_PIXELS;
+  for (let position = 0; position < ordered.length; position += 1) {
+    const entry = ordered[position];
+    if (!entry) break;
+    const remainingImages = ordered.length - position;
+    const fairShare = Math.floor(remainingPixels / remainingImages);
+    if (entry.pixels <= fairShare) {
+      allocations[entry.index] = entry.pixels;
+      remainingPixels -= entry.pixels;
+      continue;
+    }
+    for (let offset = position; offset < ordered.length; offset += 1) {
+      const pending = ordered[offset];
+      if (!pending) continue;
+      allocations[pending.index] =
+        fairShare + (offset - position < remainingPixels % remainingImages ? 1 : 0);
+    }
+    break;
+  }
+  return allocations;
+}
+
+function fitRasterDimensions(
+  width: number,
+  height: number,
+  maximumPixels: number,
+): { readonly width: number; readonly height: number } {
+  if (!Number.isSafeInteger(maximumPixels) || maximumPixels < 1) {
+    throw new Error("The image raster budget is invalid");
+  }
+  const naturalPixels = width * height;
+  if (naturalPixels <= maximumPixels) return { width, height };
+  const scale = Math.sqrt(maximumPixels / naturalPixels);
+  let outputWidth = Math.max(1, Math.floor(width * scale));
+  let outputHeight = Math.max(1, Math.floor(height * scale));
+  while (outputWidth * outputHeight > maximumPixels) {
+    if (outputWidth / width >= outputHeight / height) outputWidth -= 1;
+    else outputHeight -= 1;
+  }
+  return { width: outputWidth, height: outputHeight };
 }
 
 function makeId(): string {
@@ -1297,11 +1350,28 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     placeholder: HTMLElement,
     generation: number,
   ): Promise<DecodedReviewImage> {
+    const outputWidth = Number(placeholder.dataset["rasterWidth"]);
+    const outputHeight = Number(placeholder.dataset["rasterHeight"]);
+    const outputPixels = outputWidth * outputHeight;
+    if (
+      !Number.isSafeInteger(outputWidth) ||
+      !Number.isSafeInteger(outputHeight) ||
+      outputWidth <= 0 ||
+      outputHeight <= 0 ||
+      outputWidth > image.width ||
+      outputHeight > image.height ||
+      !Number.isSafeInteger(outputPixels) ||
+      outputPixels > MAX_INLINE_IMAGE_TOTAL_PIXELS
+    ) {
+      throw new Error("Image raster dimensions are invalid");
+    }
     const key = JSON.stringify([
       reviewDocument.reviewSessionId,
       reviewDocument.revision,
       image.id,
       image.revision,
+      outputWidth,
+      outputHeight,
     ]);
     const cached = this.#decodedImages.get(key);
     if (cached) return cached;
@@ -1309,9 +1379,14 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       const bytes = await this.#loadImageBytes(reviewDocument, image, placeholder, generation);
       if (generation !== this.#generation) throw new Error("Image load superseded");
       if (!this.#imageDecoder) throw new Error("Native browser image decoding is unavailable");
-      const decoded = await this.#imageDecoder.decode(bytes, image.mimeType);
-      if (decoded.width !== image.width || decoded.height !== image.height) {
-        throw new Error("Decoded dimensions did not match the review");
+      const decoded = await this.#imageDecoder.decode(bytes, image.mimeType, {
+        expectedWidth: image.width,
+        expectedHeight: image.height,
+        outputWidth,
+        outputHeight,
+      });
+      if (decoded.width !== outputWidth || decoded.height !== outputHeight) {
+        throw new Error("Decoded raster dimensions did not match the review");
       }
       return decoded;
     })();
@@ -1392,6 +1467,10 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       target.dataset["alt"] = alt;
       target.setAttribute("aria-label", `Add feedback for image: ${alt}`);
       target.title = `Add feedback for image: ${alt}`;
+      if (decoded.width < image.width || decoded.height < image.height) {
+        target.classList.add("is-downsampled");
+        target.style.width = `${image.width}px`;
+      }
       const canvas = this.#root.createElement("canvas");
       canvas.className = "local-image-canvas";
       canvas.setAttribute("aria-hidden", "true");
@@ -1426,7 +1505,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     const images = new Map(reviewDocument.images.map((image) => [image.id, image]));
     const placeholders = [...this.#root.querySelectorAll<HTMLElement>("[data-local-image-id]")];
     let references = 0;
-    let totalPixels = 0;
+    const candidates: RasterCandidate[] = [];
     for (const placeholder of placeholders) {
       if (references >= MAX_INLINE_IMAGE_REFERENCES) {
         this.#setPermanentImageError(
@@ -1446,12 +1525,19 @@ class MarkdownReviewController implements MarkdownReviewHandle {
         this.#setPermanentImageError(placeholder, "Image dimensions are invalid");
         continue;
       }
-      if (totalPixels + pixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
-        this.#setPermanentImageError(placeholder, "the document exceeds the decoded image limit");
-        continue;
-      }
-      totalPixels += pixels;
-      placeholder.dataset["imageApproved"] = "true";
+      candidates.push({ placeholder, image, pixels });
+    }
+    const allocations = allocateRasterPixelBudgets(candidates.map((candidate) => candidate.pixels));
+    for (const [index, candidate] of candidates.entries()) {
+      const maximumPixels = allocations[index] ?? 0;
+      const raster = fitRasterDimensions(
+        candidate.image.width,
+        candidate.image.height,
+        maximumPixels,
+      );
+      candidate.placeholder.dataset["rasterWidth"] = String(raster.width);
+      candidate.placeholder.dataset["rasterHeight"] = String(raster.height);
+      candidate.placeholder.dataset["imageApproved"] = "true";
     }
   }
 

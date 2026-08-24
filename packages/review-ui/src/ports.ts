@@ -112,8 +112,19 @@ export interface DecodedReviewImage {
   readonly data: Uint8ClampedArray;
 }
 
+export interface ReviewImageDecodeRequest {
+  readonly expectedWidth: number;
+  readonly expectedHeight: number;
+  readonly outputWidth: number;
+  readonly outputHeight: number;
+}
+
 export interface ReviewImageDecoder {
-  decode(bytes: Uint8Array, mimeType: ReviewImageMimeType): Promise<DecodedReviewImage>;
+  decode(
+    bytes: Uint8Array,
+    mimeType: ReviewImageMimeType,
+    request?: ReviewImageDecodeRequest,
+  ): Promise<DecodedReviewImage>;
 }
 
 export interface MountMarkdownReviewOptions {

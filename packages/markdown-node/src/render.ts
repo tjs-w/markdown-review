@@ -11,7 +11,6 @@ import {
   MAX_INLINE_IMAGE_BYTES,
   MAX_INLINE_IMAGE_REFERENCES,
   MAX_INLINE_IMAGE_TOTAL_BYTES,
-  MAX_INLINE_IMAGE_TOTAL_PIXELS,
 } from "./constants.js";
 import { readFileHandleBounded } from "./bounded-read.js";
 import { inspectLocalImage } from "./image.js";
@@ -36,7 +35,6 @@ interface ImageBudget {
   readonly snapshotsByDigest: Map<string, StoredImage>;
   references: number;
   totalBytes: number;
-  totalPixels: number;
 }
 
 function countNewlines(value: string): number {
@@ -89,11 +87,6 @@ async function snapshotImage(
     const imagePath = await pathPolicy.resolveLocalImagePath(markdownPath, source);
     const existing = budget.snapshotsByPath.get(imagePath);
     if (existing) {
-      const pixels = existing.descriptor.width * existing.descriptor.height;
-      if (budget.totalPixels + pixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
-        throw new Error("the document exceeds the decoded image limit");
-      }
-      budget.totalPixels += pixels;
       return imagePlaceholder(alt, existing);
     }
 
@@ -111,20 +104,12 @@ async function snapshotImage(
     const sha256 = createHash("sha256").update(snapshot.bytes).digest("hex");
     const duplicate = budget.snapshotsByDigest.get(sha256);
     if (duplicate) {
-      if (budget.totalPixels + pixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
-        throw new Error("the document exceeds the decoded image limit");
-      }
       budget.snapshotsByPath.set(imagePath, duplicate);
-      budget.totalPixels += pixels;
       return imagePlaceholder(alt, duplicate);
     }
     if (budget.totalBytes + snapshot.sizeBytes > MAX_INLINE_IMAGE_TOTAL_BYTES) {
       throw new Error("the document exceeds the review image-size limit");
     }
-    if (budget.totalPixels + pixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
-      throw new Error("the document exceeds the decoded image limit");
-    }
-
     const id = `local-image-${budget.items.length + 1}`;
     const descriptor: ReviewImageDescriptor = {
       id,
@@ -141,7 +126,6 @@ async function snapshotImage(
     budget.snapshotsByPath.set(imagePath, stored);
     budget.snapshotsByDigest.set(sha256, stored);
     budget.totalBytes += snapshot.sizeBytes;
-    budget.totalPixels += pixels;
     return imagePlaceholder(alt, stored);
   } catch (error: unknown) {
     const reason = error instanceof Error ? error.message : "the local file could not be loaded";
@@ -206,7 +190,6 @@ export async function renderMarkdown(
     snapshotsByDigest: new Map(),
     references: 0,
     totalBytes: 0,
-    totalPixels: 0,
   };
   let cursor = 0;
   let cursorLine = 1;

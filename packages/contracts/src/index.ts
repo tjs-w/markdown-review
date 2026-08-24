@@ -16,6 +16,7 @@ export const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_INLINE_IMAGE_TOTAL_BYTES = 12 * 1024 * 1024;
 export const MAX_INLINE_IMAGE_REFERENCES = 64;
 export const MAX_INLINE_IMAGES = MAX_INLINE_IMAGE_REFERENCES;
+// Browser output canvases share this budget; source images remain bounded per descriptor.
 export const MAX_INLINE_IMAGE_TOTAL_PIXELS = 24_000_000;
 export const IMAGE_CHUNK_BYTES = 24 * 1024;
 export const MAX_IMAGE_CHUNKS = Math.ceil(MAX_INLINE_IMAGE_BYTES / IMAGE_CHUNK_BYTES);
@@ -100,15 +101,8 @@ export const ReviewDocumentSchema = ReviewDocumentSummarySchema.extend({
       imageIds.add(image.id);
     }
     const totalBytes = document.images.reduce((total, image) => total + image.byteLength, 0);
-    const totalPixels = document.images.reduce(
-      (total, image) => total + image.width * image.height,
-      0,
-    );
     if (totalBytes > MAX_INLINE_IMAGE_TOTAL_BYTES) {
       context.addIssue({ code: "custom", message: "The document exceeds the image byte limit" });
-    }
-    if (totalPixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
-      context.addIssue({ code: "custom", message: "The document exceeds the image pixel limit" });
     }
   });
 
