@@ -1,5 +1,16 @@
 import { z } from "zod";
 
+import { MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from "./png-safety.js";
+
+export {
+  inspectPngSafety,
+  MAX_IMAGE_DECODED_BYTES,
+  MAX_IMAGE_DIMENSION,
+  MAX_IMAGE_PIXELS,
+  validatePngSafety,
+  type PngSafetyInfo,
+} from "./png-safety.js";
+
 export const MAX_QUEUE_ITEMS = 20;
 export const MAX_PATH_LENGTH = 4096;
 export const MAX_QUEUE_ID_LENGTH = 120;
@@ -10,9 +21,8 @@ export const MAX_DOCUMENT_TITLE_LENGTH = 256;
 export const MAX_RENDERED_HTML_LENGTH = 16 * 1024 * 1024;
 export const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_INLINE_IMAGE_TOTAL_BYTES = 12 * 1024 * 1024;
-export const MAX_INLINE_IMAGES = 8;
-export const MAX_IMAGE_DIMENSION = 8192;
-export const MAX_IMAGE_PIXELS = 16_000_000;
+export const MAX_INLINE_IMAGE_REFERENCES = 64;
+export const MAX_INLINE_IMAGES = MAX_INLINE_IMAGE_REFERENCES;
 export const MAX_INLINE_IMAGE_TOTAL_PIXELS = 24_000_000;
 export const IMAGE_CHUNK_BYTES = 24 * 1024;
 export const MAX_IMAGE_CHUNKS = Math.ceil(MAX_INLINE_IMAGE_BYTES / IMAGE_CHUNK_BYTES);
@@ -65,6 +75,17 @@ export const ReviewDocumentSchema = ReviewDocumentSummarySchema.extend({
 })
   .strict()
   .superRefine((document, context) => {
+    const imageIds = new Set<string>();
+    for (const [index, image] of document.images.entries()) {
+      if (imageIds.has(image.id)) {
+        context.addIssue({
+          code: "custom",
+          message: "Image descriptor IDs must be unique",
+          path: ["images", index, "id"],
+        });
+      }
+      imageIds.add(image.id);
+    }
     const totalBytes = document.images.reduce((total, image) => total + image.byteLength, 0);
     const totalPixels = document.images.reduce(
       (total, image) => total + image.width * image.height,

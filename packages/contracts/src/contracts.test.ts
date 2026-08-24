@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   ErrorReviewDocumentSchema,
+  MAX_INLINE_IMAGES,
   PersistedReviewStateSchema,
   PrivateReviewImageChunkSchema,
   ReviewBatchV1Schema,
@@ -102,6 +103,52 @@ describe("portable review contracts", () => {
         byteOffset: 0,
         byteLength: 3,
         data: "AAAA",
+      }).success,
+    ).toBe(true);
+  });
+
+  test("accepts the unique-image boundary and rejects one descriptor beyond it", () => {
+    const document = {
+      kind: "markdown-review-document" as const,
+      path: "/tmp/review.md",
+      filename: "review.md",
+      title: "Review",
+      revision: "r1",
+      modifiedAt: "2026-08-23T00:00:00.000Z",
+      sizeBytes: 10,
+      lineCount: 1,
+      blockCount: 1,
+      reviewSessionId: "8707d8a0-b84e-4a46-98e1-68ca135945de",
+      html: "<p>Review</p>",
+    };
+    const images = Array.from({ length: MAX_INLINE_IMAGES + 1 }, (_, index) => ({
+      id: `local-image-${index + 1}`,
+      mimeType: "image/png" as const,
+      revision: "a".repeat(64),
+      modifiedAt: "2026-08-23T00:00:00.000Z",
+      byteLength: 1,
+      chunkCount: 1,
+      width: 1,
+      height: 1,
+    }));
+
+    expect(
+      ReviewDocumentSchema.safeParse({ ...document, images: images.slice(0, MAX_INLINE_IMAGES) })
+        .success,
+    ).toBe(true);
+    expect(ReviewDocumentSchema.safeParse({ ...document, images }).success).toBe(false);
+
+    const firstImage = images[0];
+    const secondImage = images[1];
+    if (!firstImage || !secondImage) throw new Error("Expected image boundary fixtures");
+    const duplicateId = [firstImage, { ...secondImage, id: firstImage.id }];
+    expect(ReviewDocumentSchema.safeParse({ ...document, images: duplicateId }).success).toBe(
+      false,
+    );
+    expect(
+      ReviewDocumentSchema.safeParse({
+        ...document,
+        images: [{ ...firstImage, id: "image-1", revision: "i1" }],
       }).success,
     ).toBe(true);
   });

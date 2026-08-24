@@ -58,7 +58,9 @@ export class MarkdownReviewService {
 
   async open(pathInput: string): Promise<OpenedMarkdownReview> {
     const path = await this.#pathPolicy.resolveMarkdownPath(pathInput);
-    const snapshot = await readFileHandleBounded(path, MAX_MARKDOWN_BYTES, "The Markdown file");
+    const snapshot = await readFileHandleBounded(path, MAX_MARKDOWN_BYTES, "The Markdown file", {
+      expectedCanonicalPath: path,
+    });
     const markdown = snapshot.bytes.toString("utf8");
     const rendered = await renderMarkdown(markdown, path, this.#pathPolicy);
     const revision = createHash("sha256").update(snapshot.bytes).digest("hex").slice(0, 16);

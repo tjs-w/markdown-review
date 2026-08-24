@@ -21,7 +21,19 @@ describe("portable browser PNG decoder", () => {
     });
   }
 
-  test("downsamples 16-bit channels to their high byte", () => {
+  test("converts a bounded indexed-color palette to RGBA", () => {
+    const encoded = encode({
+      width: 1,
+      height: 1,
+      depth: 8,
+      channels: 1,
+      data: Uint8Array.from([0]),
+      palette: [[12, 34, 56, 78]],
+    });
+    expect([...decodePng(encoded).data]).toEqual([12, 34, 56, 78]);
+  });
+
+  test("rejects 16-bit channels before decoding", () => {
     const encoded = encode({
       width: 1,
       height: 1,
@@ -29,7 +41,7 @@ describe("portable browser PNG decoder", () => {
       depth: 16,
       data: Uint16Array.from([0x1234]),
     });
-    expect([...decodePng(encoded).data]).toEqual([0x12, 0x12, 0x12, 255]);
+    expect(() => decodePng(encoded)).toThrow(/8-bit PNG samples/);
   });
 
   test("rejects malformed PNG input", () => {

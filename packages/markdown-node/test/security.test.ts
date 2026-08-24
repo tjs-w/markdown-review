@@ -2,11 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { crc32, deflateSync } from "node:zlib";
+import { encode } from "fast-png";
 
 import {
   DefaultMarkdownPathPolicy,
   MAX_IMAGE_DIMENSION,
   MAX_INLINE_IMAGE_BYTES,
+  MAX_INLINE_IMAGE_REFERENCES,
   MAX_MARKDOWN_BYTES,
   MarkdownReviewService,
   readFileHandleBounded,
@@ -19,6 +22,36 @@ const ONE_PIXEL_PNG = Buffer.from(
   "base64",
 );
 const temporaryDirectories: string[] = [];
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const typeBytes = Buffer.from(type, "ascii");
+  const chunk = Buffer.allocUnsafe(data.length + 12);
+  chunk.writeUInt32BE(data.length, 0);
+  typeBytes.copy(chunk, 4);
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(Buffer.concat([typeBytes, data])), data.length + 8);
+  return chunk;
+}
+
+function insertAfterIhdr(png: Buffer, type: string, data: Buffer): Buffer {
+  return Buffer.concat([png.subarray(0, 33), pngChunk(type, data), png.subarray(33)]);
+}
+
+function insertChunksAfterIhdr(png: Buffer, chunks: readonly Buffer[]): Buffer {
+  return Buffer.concat([png.subarray(0, 33), ...chunks, png.subarray(33)]);
+}
+
+function replaceIdat(png: Buffer, data: Buffer): Buffer {
+  const typeOffset = png.indexOf(Buffer.from("IDAT", "ascii"));
+  if (typeOffset < 4) throw new Error("Expected an IDAT chunk");
+  const chunkOffset = typeOffset - 4;
+  const nextOffset = typeOffset + 4 + png.readUInt32BE(chunkOffset) + 4;
+  return Buffer.concat([
+    png.subarray(0, chunkOffset),
+    pngChunk("IDAT", data),
+    png.subarray(nextOffset),
+  ]);
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -124,12 +157,7 @@ describe("filesystem and image trust boundaries", () => {
 
   test("rejects a truncated or CRC-corrupted PNG before session creation", () => {
     const header = ONE_PIXEL_PNG.subarray(0, 24);
-    const dimensions = readPngDimensions(header);
-    expect(
-      failureMessage(() => {
-        validatePng(header, dimensions);
-      }),
-    ).toMatch(/complete valid PNG/);
+    expect(() => readPngDimensions(header)).toThrow(/valid PNG/);
 
     const corrupted = Buffer.from(ONE_PIXEL_PNG);
     const lastByte = corrupted[corrupted.length - 1];
@@ -140,6 +168,69 @@ describe("filesystem and image trust boundaries", () => {
         validatePng(corrupted, readPngDimensions(corrupted));
       }),
     ).toMatch(/complete valid PNG/);
+  });
+
+  test("rejects unsafe PNG profiles, animation, palettes, inflation, and sample depths", () => {
+    const profileBomb = insertAfterIhdr(
+      ONE_PIXEL_PNG,
+      "iCCP",
+      Buffer.concat([
+        Buffer.from("profile\0", "latin1"),
+        Buffer.from([0]),
+        deflateSync(Buffer.alloc(1024 * 1024)),
+      ]),
+    );
+    expect(() => readPngDimensions(profileBomb)).toThrow(/color profiles/);
+
+    const animated = insertAfterIhdr(ONE_PIXEL_PNG, "acTL", Buffer.alloc(8));
+    expect(() => readPngDimensions(animated)).toThrow(/Animated PNG/);
+
+    const indexed = Buffer.from(ONE_PIXEL_PNG);
+    indexed[25] = 3;
+    const paletteBomb = insertAfterIhdr(indexed, "PLTE", Buffer.alloc(30_000));
+    expect(() => readPngDimensions(paletteBomb)).toThrow(/1 to 256 RGB entries/);
+
+    const grayscale = Buffer.from(
+      encode({ width: 1, height: 1, channels: 1, data: Uint8Array.from([42]) }),
+    );
+    const colorKeyTransparency = insertAfterIhdr(grayscale, "tRNS", Buffer.from([0, 42]));
+    expect(() => readPngDimensions(colorKeyTransparency)).toThrow(/color-key transparency/);
+
+    const imageDataBomb = replaceIdat(ONE_PIXEL_PNG, deflateSync(Buffer.alloc(1024 * 1024)));
+    const bombDimensions = readPngDimensions(imageDataBomb);
+    expect(() => {
+      validatePng(imageDataBomb, bombDimensions);
+    }).toThrow(/decoded-size limit/);
+
+    const sixteenBit = Buffer.from(
+      encode({
+        width: 1,
+        height: 1,
+        channels: 4,
+        depth: 16,
+        data: Uint16Array.from([1, 2, 3, 4]),
+      }),
+    );
+    expect(() => readPngDimensions(sixteenBit)).toThrow(/8-bit PNG samples/);
+  });
+
+  test("bounds PNG structural work and requires consecutive image-data chunks", () => {
+    const emptyTextChunk = pngChunk("tEXt", Buffer.alloc(0));
+    const chunkStorm = insertChunksAfterIhdr(
+      ONE_PIXEL_PNG,
+      Array.from({ length: 1022 }, () => emptyTextChunk),
+    );
+    expect(() => readPngDimensions(chunkStorm)).toThrow(/more than 1024 chunks/);
+
+    const emptyImageData = pngChunk("IDAT", Buffer.alloc(0));
+    const imageDataStorm = insertChunksAfterIhdr(
+      ONE_PIXEL_PNG,
+      Array.from({ length: 256 }, () => emptyImageData),
+    );
+    expect(() => readPngDimensions(imageDataStorm)).toThrow(/more than 256 image-data chunks/);
+
+    const splitImageData = insertChunksAfterIhdr(ONE_PIXEL_PNG, [emptyImageData, emptyTextChunk]);
+    expect(() => readPngDimensions(splitImageData)).toThrow(/must be consecutive/);
   });
 
   test("renders hostile image sources as inert notices without reading them", async () => {
@@ -160,7 +251,7 @@ describe("filesystem and image trust boundaries", () => {
     expect(opened.document.html).not.toContain(ONE_PIXEL_PNG.toString("base64"));
   });
 
-  test("enforces local-image count, byte, and decoded-dimension budgets", async () => {
+  test("enforces local-image byte and decoded-dimension budgets", async () => {
     const directory = await temporaryDirectory();
     const markdown = join(directory, "review.md");
     const oversized = join(directory, "oversized.png");
@@ -169,21 +260,63 @@ describe("filesystem and image trust boundaries", () => {
     const hugeHeader = Buffer.from(ONE_PIXEL_PNG);
     hugeHeader.writeUInt32BE(MAX_IMAGE_DIMENSION + 1, 16);
     await writeFile(hugeDimensions, hugeHeader);
+    await writeFile(
+      markdown,
+      ["# Review", "![Oversized](oversized.png)", "![Huge](huge.png)"].join("\n\n"),
+    );
+
+    const opened = await new MarkdownReviewService().open(markdown);
+    expect(opened.document.images).toHaveLength(0);
+    expect(opened.document.html).toContain(`exceeds the ${MAX_INLINE_IMAGE_BYTES}-byte limit`);
+    expect(opened.document.html).toContain("decoded dimensions exceed the safety limit");
+  });
+
+  test("deduplicates canonical image snapshots and bounds local image references", async () => {
+    const directory = await temporaryDirectory();
+    const markdown = join(directory, "review.md");
     await writeFile(join(directory, "pixel.png"), ONE_PIXEL_PNG);
     await writeFile(
       markdown,
       [
         "# Review",
-        "![Oversized](oversized.png)",
-        "![Huge](huge.png)",
-        ...Array.from({ length: 9 }, (_, index) => `![Pixel ${index + 1}](pixel.png)`),
+        ...Array.from(
+          { length: MAX_INLINE_IMAGE_REFERENCES + 1 },
+          (_, index) => `![Pixel ${index + 1}](${index % 2 === 0 ? "pixel.png" : "./pixel.png"})`,
+        ),
       ].join("\n\n"),
     );
 
     const opened = await new MarkdownReviewService().open(markdown);
-    expect(opened.document.images).toHaveLength(8);
-    expect(opened.document.html).toContain(`exceeds the ${MAX_INLINE_IMAGE_BYTES}-byte limit`);
-    expect(opened.document.html).toContain("decoded dimensions exceed the safety limit");
-    expect(opened.document.html).toContain("supports up to 8 local images");
+    const renderedReferences =
+      opened.document.html.match(/data-local-image-id="local-image-1"/g) ?? [];
+    expect(opened.document.images).toHaveLength(1);
+    expect(renderedReferences).toHaveLength(MAX_INLINE_IMAGE_REFERENCES);
+    expect(opened.document.html).toContain(
+      `processes up to ${MAX_INLINE_IMAGE_REFERENCES} local image references`,
+    );
+  });
+
+  test("counts invalid image tags against the local reference work budget", async () => {
+    const directory = await temporaryDirectory();
+    const markdown = join(directory, "review.md");
+    await writeFile(join(directory, "pixel.png"), ONE_PIXEL_PNG);
+    await writeFile(
+      markdown,
+      [
+        "# Review",
+        ...Array.from(
+          { length: MAX_INLINE_IMAGE_REFERENCES },
+          (_, index) => `![Missing ${index + 1}](missing-${index + 1}.png)`,
+        ),
+        "![Valid but over budget](pixel.png)",
+      ].join("\n\n"),
+    );
+
+    const opened = await new MarkdownReviewService().open(markdown);
+    expect(opened.document.images).toHaveLength(0);
+    expect(opened.document.html).not.toContain("data-local-image-id");
+    expect(opened.document.html).toContain(
+      `processes up to ${MAX_INLINE_IMAGE_REFERENCES} local image references`,
+    );
   });
 });

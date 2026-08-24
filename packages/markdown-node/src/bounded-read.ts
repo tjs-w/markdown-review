@@ -1,5 +1,5 @@
 import type { FileHandle } from "node:fs/promises";
-import { open } from "node:fs/promises";
+import { open, realpath, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 
 const READ_CHUNK_BYTES = 64 * 1024;
@@ -8,6 +8,10 @@ export interface FileSnapshot {
   readonly bytes: Buffer;
   readonly modifiedAt: string;
   readonly sizeBytes: number;
+}
+
+export interface BoundedReadOptions {
+  readonly expectedCanonicalPath?: string;
 }
 
 function sameFileSnapshot(
@@ -25,16 +29,36 @@ function sameFileSnapshot(
   );
 }
 
+async function assertOpenedPath(
+  filePath: string,
+  expectedCanonicalPath: string | undefined,
+  opened: Awaited<ReturnType<FileHandle["stat"]>>,
+  label: string,
+): Promise<void> {
+  if (!expectedCanonicalPath) return;
+  const canonicalPath = await realpath(filePath);
+  const pathInfo = await stat(filePath);
+  if (
+    canonicalPath !== expectedCanonicalPath ||
+    pathInfo.dev !== opened.dev ||
+    pathInfo.ino !== opened.ino
+  ) {
+    throw new Error(`${label} path changed while it was being opened; retry the review.`);
+  }
+}
+
 export async function readFileHandleBounded(
   filePath: string,
   maximumBytes: number,
   label: string,
+  options: BoundedReadOptions = {},
 ): Promise<FileSnapshot> {
   const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
   const handle = await open(filePath, constants.O_RDONLY | noFollow);
   try {
     const before = await handle.stat();
     if (!before.isFile()) throw new Error(`${label} must be a regular file.`);
+    await assertOpenedPath(filePath, options.expectedCanonicalPath, before, label);
     if (before.size > maximumBytes)
       throw new Error(`${label} exceeds the ${maximumBytes}-byte limit.`);
 
@@ -56,6 +80,7 @@ export async function readFileHandleBounded(
     if (!sameFileSnapshot(before, after, totalBytes)) {
       throw new Error(`${label} changed while it was being read; retry the review.`);
     }
+    await assertOpenedPath(filePath, options.expectedCanonicalPath, after, label);
 
     return {
       bytes: Buffer.concat(chunks, totalBytes),

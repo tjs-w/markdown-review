@@ -9,9 +9,9 @@ import {
   MAX_IMAGE_DIMENSION,
   MAX_IMAGE_PIXELS,
   MAX_INLINE_IMAGE_BYTES,
+  MAX_INLINE_IMAGE_REFERENCES,
   MAX_INLINE_IMAGE_TOTAL_BYTES,
   MAX_INLINE_IMAGE_TOTAL_PIXELS,
-  MAX_INLINE_IMAGES,
 } from "./constants.js";
 import { readFileHandleBounded } from "./bounded-read.js";
 import type { MarkdownPathPolicy } from "./path-policy.js";
@@ -32,6 +32,8 @@ export interface RenderedMarkdown {
 
 interface ImageBudget {
   readonly items: StoredImage[];
+  readonly snapshotsByPath: Map<string, StoredImage>;
+  references: number;
   totalBytes: number;
   totalPixels: number;
 }
@@ -62,6 +64,11 @@ function imageNotice(alt: string, message: string): string {
   return `<span class="local-image image-notice" role="img" aria-label="${encodeHtmlAttribute(alt)}"><span class="local-image-status">${encodeHtmlAttribute(message)}</span></span>`;
 }
 
+function imagePlaceholder(alt: string, image: StoredImage): string {
+  const { id, width, height } = image.descriptor;
+  return `<span class="local-image" data-local-image-id="${id}" data-alt="${encodeHtmlAttribute(alt)}" role="status" aria-live="polite" style="aspect-ratio:${width}/${height}"><span class="local-image-status">Image queued…</span></span>`;
+}
+
 async function snapshotImage(
   source: string,
   alt: string,
@@ -69,19 +76,31 @@ async function snapshotImage(
   budget: ImageBudget,
   pathPolicy: MarkdownPathPolicy,
 ): Promise<string> {
-  if (budget.items.length >= MAX_INLINE_IMAGES) {
+  if (budget.references >= MAX_INLINE_IMAGE_REFERENCES) {
     return imageNotice(
       alt,
-      `Image not rendered: this review supports up to ${MAX_INLINE_IMAGES} local images.`,
+      `Image not rendered: this review processes up to ${MAX_INLINE_IMAGE_REFERENCES} local image references.`,
     );
   }
+  budget.references += 1;
 
   try {
     const imagePath = await pathPolicy.resolveLocalImagePath(markdownPath, source);
+    const existing = budget.snapshotsByPath.get(imagePath);
+    if (existing) {
+      const pixels = existing.descriptor.width * existing.descriptor.height;
+      if (budget.totalPixels + pixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
+        throw new Error("the document exceeds the decoded image limit");
+      }
+      budget.totalPixels += pixels;
+      return imagePlaceholder(alt, existing);
+    }
+
     const snapshot = await readFileHandleBounded(
       imagePath,
       MAX_INLINE_IMAGE_BYTES,
       "The local image",
+      { expectedCanonicalPath: imagePath },
     );
     if (snapshot.sizeBytes === 0) throw new Error("the local file is empty or unavailable");
     if (budget.totalBytes + snapshot.sizeBytes > MAX_INLINE_IMAGE_TOTAL_BYTES) {
@@ -109,10 +128,12 @@ async function snapshotImage(
       width,
       height,
     };
-    budget.items.push({ descriptor, bytes: snapshot.bytes, sha256 });
+    const stored = { descriptor, bytes: snapshot.bytes, sha256 };
+    budget.items.push(stored);
+    budget.snapshotsByPath.set(imagePath, stored);
     budget.totalBytes += snapshot.sizeBytes;
     budget.totalPixels += pixels;
-    return `<span class="local-image" data-local-image-id="${id}" data-alt="${encodeHtmlAttribute(alt)}" role="status" aria-live="polite" style="aspect-ratio:${width}/${height}"><span class="local-image-status">Image queued…</span></span>`;
+    return imagePlaceholder(alt, stored);
   } catch (error: unknown) {
     const reason = error instanceof Error ? error.message : "the local file could not be loaded";
     return imageNotice(alt, `Image not rendered: ${reason}.`);
@@ -170,7 +191,13 @@ export async function renderMarkdown(
 ): Promise<RenderedMarkdown> {
   const tokens = marked.lexer(markdown, { gfm: true });
   const blocks: string[] = [];
-  const budget: ImageBudget = { items: [], totalBytes: 0, totalPixels: 0 };
+  const budget: ImageBudget = {
+    items: [],
+    snapshotsByPath: new Map(),
+    references: 0,
+    totalBytes: 0,
+    totalPixels: 0,
+  };
   let cursor = 0;
   let cursorLine = 1;
 

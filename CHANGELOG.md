@@ -9,6 +9,7 @@ All notable changes to this project will be documented here.
 - Added queued, line-anchored comments and one-batch submission.
 - Added stable comment references within a review round and escaped literal references.
 - Added safe relative local PNG rendering through private, bounded chunks.
+- Increased the local PNG reference budget to 64, deduplicated immutable snapshots and verified browser decodes, and hardened reference, pixel, palette, chunk, decompression, format, and path-race limits.
 - Kept full document content out of model-visible MCP tool results.
 - Formatted Submit messages as concise Markdown with a lossless fenced JSON review envelope.
 - Added the automatic Markdown review skill, smoke tests, and a browser UI harness.

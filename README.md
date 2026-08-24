@@ -130,10 +130,11 @@ Then restart the desktop app and install the plugin from the local marketplace s
 - The component cannot write the Markdown file.
 - Rendered HTML is sanitized before it reaches the component.
 - Remote, absolute, and out-of-directory images are not loaded.
-- Only relative PNG paths inside the Markdown file's directory are supported.
+- Only relative paths to static, 8-bit PNG files inside the Markdown file's directory are supported. Explicit alpha channels and bounded indexed-palette transparency are supported; color-key `tRNS` transparency is rejected to avoid silent decoder incompatibilities. JPEG, GIF, WebP, SVG, APNG, 16-bit PNG, and PNGs with embedded compressed color profiles are not rendered.
 - The component resource declares no network or remote resource domains.
 - A Markdown file is limited to 2 MiB.
-- A review supports at most 8 PNGs, 5 MiB per image, and 12 MiB total, with decoded dimension and pixel limits.
+- A review processes at most 64 local-image references—including invalid references—5 MiB per unique image, and 12 MiB of unique image snapshots in total, with decoded-dimension, decompression, and rendered-pixel limits. References that resolve to the same canonical file share one immutable snapshot and verified client decode.
+- Canonical paths and opened-file identities are rechecked around each bounded read. These checks are defense in depth, not an OS sandbox against another local process that can continuously replace the document directory hierarchy during a read.
 - Component access uses opaque, expiring review-session capabilities. Sessions slide for two hours and are bounded by a six-session LRU and a 72 MiB aggregate image cache.
 - Image bytes and SHA-256 digests are snapshotted into a session, so later file mutations cannot change an in-flight review.
 - Full document content and image chunks are placed in component-private metadata rather than model-visible structured output.

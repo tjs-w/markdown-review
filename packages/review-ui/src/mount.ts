@@ -1,9 +1,11 @@
-import type {
-  PrivateReviewImageChunk,
-  QueuedFeedback,
-  ReviewDocument,
-  ReviewImageDescriptor,
-  ReviewSelection,
+import {
+  MAX_INLINE_IMAGE_REFERENCES,
+  MAX_INLINE_IMAGE_TOTAL_PIXELS,
+  type PrivateReviewImageChunk,
+  type QueuedFeedback,
+  type ReviewDocument,
+  type ReviewImageDescriptor,
+  type ReviewSelection,
 } from "@markdown-review/contracts";
 import {
   completeReviewSubmission,
@@ -20,6 +22,7 @@ import {
 } from "@markdown-review/core";
 
 import type {
+  DecodedReviewImage,
   DisplayMode,
   MarkdownReviewHandle,
   MountMarkdownReviewOptions,
@@ -204,6 +207,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   #generation = 0;
   #renderKey: string | null = null;
   #activeLoad: ActiveLoad | null = null;
+  #decodedImages = new Map<string, Promise<DecodedReviewImage>>();
   #fullscreenRequestedFor: string | null = null;
   #inlineReviewFallback = false;
   #sendingIds = new Set<string>();
@@ -244,6 +248,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     if (this.#destroyed) return;
     this.#destroyed = true;
     this.#abort.abort();
+    this.#decodedImages.clear();
     this.#unsubscribePresentation();
     if (this.#toastTimer !== undefined) clearTimeout(this.#toastTimer);
   }
@@ -1098,6 +1103,39 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     return output;
   }
 
+  async #loadDecodedImage(
+    reviewDocument: ReviewDocument,
+    image: ReviewImageDescriptor,
+    placeholder: HTMLElement,
+    generation: number,
+  ): Promise<DecodedReviewImage> {
+    const key = JSON.stringify([
+      reviewDocument.reviewSessionId,
+      reviewDocument.revision,
+      image.id,
+      image.revision,
+    ]);
+    const cached = this.#decodedImages.get(key);
+    if (cached) return cached;
+    const promise = (async (): Promise<DecodedReviewImage> => {
+      const bytes = await this.#loadImageBytes(reviewDocument, image, placeholder, generation);
+      if (generation !== this.#generation) throw new Error("Image load superseded");
+      if (!this.#imageDecoder) throw new Error("The bundled PNG decoder is unavailable");
+      const decoded = this.#imageDecoder.decodePng(bytes);
+      if (decoded.width !== image.width || decoded.height !== image.height) {
+        throw new Error("Decoded dimensions did not match the review");
+      }
+      return decoded;
+    })();
+    this.#decodedImages.set(key, promise);
+    try {
+      return await promise;
+    } catch (error) {
+      if (this.#decodedImages.get(key) === promise) this.#decodedImages.delete(key);
+      throw error;
+    }
+  }
+
   #assertMatchingChunk(
     chunk: PrivateReviewImageChunk,
     reviewDocument: ReviewDocument,
@@ -1152,15 +1190,10 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       const status = placeholder.querySelector<HTMLElement>(".local-image-status");
       if (status) status.textContent = "Loading image…";
       if (!image || image.mimeType !== "image/png") throw new Error("PNG metadata is unavailable");
-      const bytes = await this.#loadImageBytes(reviewDocument, image, placeholder, generation);
+      const decoded = await this.#loadDecodedImage(reviewDocument, image, placeholder, generation);
       if (generation !== this.#generation) {
         placeholder.dataset["loading"] = "";
         return;
-      }
-      if (!this.#imageDecoder) throw new Error("The bundled PNG decoder is unavailable");
-      const decoded = this.#imageDecoder.decodePng(bytes);
-      if (decoded.width !== image.width || decoded.height !== image.height) {
-        throw new Error("Decoded dimensions did not match the review");
       }
       const canvas = this.#root.createElement("canvas");
       canvas.className = "local-image-canvas";
@@ -1183,12 +1216,54 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     }
   }
 
+  #setPermanentImageError(placeholder: HTMLElement, message: string): void {
+    const alt = placeholder.dataset["alt"] || "Local Markdown image";
+    delete placeholder.dataset["imageApproved"];
+    delete placeholder.dataset["localImageId"];
+    this.#setImageError(placeholder, undefined, alt, new Error(message));
+  }
+
+  #prepareLocalImages(reviewDocument: ReviewDocument): void {
+    const images = new Map(reviewDocument.images.map((image) => [image.id, image]));
+    const placeholders = [...this.#root.querySelectorAll<HTMLElement>("[data-local-image-id]")];
+    let references = 0;
+    let totalPixels = 0;
+    for (const placeholder of placeholders) {
+      if (references >= MAX_INLINE_IMAGE_REFERENCES) {
+        this.#setPermanentImageError(
+          placeholder,
+          `this review processes up to ${MAX_INLINE_IMAGE_REFERENCES} local image references`,
+        );
+        continue;
+      }
+      references += 1;
+      const image = images.get(placeholder.dataset["localImageId"] ?? "");
+      if (!image || image.mimeType !== "image/png") {
+        this.#setPermanentImageError(placeholder, "PNG metadata is unavailable");
+        continue;
+      }
+      const pixels = image.width * image.height;
+      if (!Number.isSafeInteger(pixels) || pixels <= 0) {
+        this.#setPermanentImageError(placeholder, "PNG dimensions are invalid");
+        continue;
+      }
+      if (totalPixels + pixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
+        this.#setPermanentImageError(placeholder, "the document exceeds the decoded image limit");
+        continue;
+      }
+      totalPixels += pixels;
+      placeholder.dataset["imageApproved"] = "true";
+    }
+  }
+
   async #installLocalImages(reviewDocument: ReviewDocument, generation: number): Promise<void> {
     if (!this.#reviewSurfaceVisible()) return;
     const images = new Map(reviewDocument.images.map((image) => [image.id, image]));
-    const queue = [...this.#root.querySelectorAll<HTMLElement>("[data-local-image-id]")].filter(
-      (placeholder) => placeholder.dataset["loading"] !== "true",
-    );
+    const queue = [
+      ...this.#root.querySelectorAll<HTMLElement>(
+        '[data-image-approved="true"][data-local-image-id]',
+      ),
+    ].filter((placeholder) => placeholder.dataset["loading"] !== "true");
     let next = 0;
     const worker = async (): Promise<void> => {
       while (next < queue.length) {
@@ -1265,6 +1340,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       return;
     }
     this.#generation = Math.max(this.#generation, generation);
+    this.#decodedImages.clear();
     this.#document = reviewDocument;
     this.#lastGoodDocument = reviewDocument;
     this.#renderKey = key;
@@ -1284,6 +1360,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       empty.textContent = "This Markdown file is empty.";
       surface.replaceChildren(empty);
     }
+    this.#prepareLocalImages(reviewDocument);
     this.#closeCommentsPanel(false);
     if (this.#round.persisted.path !== reviewDocument.path) {
       this.#round = createReviewRoundState(

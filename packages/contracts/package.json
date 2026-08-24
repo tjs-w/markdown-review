@@ -7,12 +7,17 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./png-safety": {
+      "types": "./src/png-safety.ts",
+      "import": "./src/png-safety.ts"
     }
   },
   "scripts": {
     "test": "bun test"
   },
   "dependencies": {
+    "fflate": "^0.8.3",
     "zod": "^4.4.3"
   }
 }

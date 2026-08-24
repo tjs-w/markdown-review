@@ -39439,271 +39439,6 @@ function createFileReviewUiAssetLoader(options) {
 init_external();
 init_external();
 
-// packages/contracts/src/index.ts
-var MAX_QUEUE_ITEMS = 20;
-var MAX_PATH_LENGTH = 4096;
-var MAX_QUEUE_ID_LENGTH = 120;
-var MAX_REVISION_LENGTH = 128;
-var MAX_QUOTE_LENGTH = 1400;
-var MAX_FEEDBACK_LENGTH = 2400;
-var MAX_DOCUMENT_TITLE_LENGTH = 256;
-var MAX_RENDERED_HTML_LENGTH = 16 * 1024 * 1024;
-var MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
-var MAX_INLINE_IMAGE_TOTAL_BYTES = 12 * 1024 * 1024;
-var MAX_INLINE_IMAGES = 8;
-var MAX_IMAGE_DIMENSION = 8192;
-var MAX_IMAGE_PIXELS = 16e6;
-var MAX_INLINE_IMAGE_TOTAL_PIXELS = 24e6;
-var IMAGE_CHUNK_BYTES = 24 * 1024;
-var MAX_IMAGE_CHUNKS = Math.ceil(MAX_INLINE_IMAGE_BYTES / IMAGE_CHUNK_BYTES);
-var MAX_BASE64_CHUNK_LENGTH = Math.ceil(IMAGE_CHUNK_BYTES / 3) * 4;
-var NonNegativeSafeIntegerSchema = external_exports.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
-var PositiveSafeIntegerSchema = external_exports.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
-var PathSchema = external_exports.string().min(1).max(MAX_PATH_LENGTH);
-var RevisionSchema = external_exports.string().max(MAX_REVISION_LENGTH);
-var TimestampSchema = external_exports.string().min(1).max(128);
-var CommentReferenceSchema = external_exports.string().regex(/^#[1-9]\d*$/);
-var ReviewDocumentIdentitySchema = external_exports.object({
-  path: PathSchema,
-  revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH)
-}).strict();
-var ReviewDocumentSummarySchema = ReviewDocumentIdentitySchema.extend({
-  filename: external_exports.string().min(1).max(MAX_PATH_LENGTH),
-  title: external_exports.string().min(1).max(MAX_DOCUMENT_TITLE_LENGTH),
-  modifiedAt: TimestampSchema,
-  sizeBytes: NonNegativeSafeIntegerSchema,
-  lineCount: NonNegativeSafeIntegerSchema,
-  blockCount: NonNegativeSafeIntegerSchema
-}).strict();
-var ReviewImageDescriptorSchema = external_exports.object({
-  id: external_exports.string().min(1).max(128),
-  mimeType: external_exports.literal("image/png"),
-  revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
-  modifiedAt: TimestampSchema,
-  byteLength: PositiveSafeIntegerSchema.max(MAX_INLINE_IMAGE_BYTES),
-  chunkCount: PositiveSafeIntegerSchema.max(MAX_IMAGE_CHUNKS),
-  width: PositiveSafeIntegerSchema.max(MAX_IMAGE_DIMENSION),
-  height: PositiveSafeIntegerSchema.max(MAX_IMAGE_DIMENSION)
-}).strict().refine((image) => image.width * image.height <= MAX_IMAGE_PIXELS, {
-  message: "The decoded image exceeds the pixel limit"
-});
-var ReviewDocumentSchema = ReviewDocumentSummarySchema.extend({
-  kind: external_exports.literal("markdown-review-document"),
-  reviewSessionId: external_exports.uuid(),
-  html: external_exports.string().max(MAX_RENDERED_HTML_LENGTH),
-  images: external_exports.array(ReviewImageDescriptorSchema).max(MAX_INLINE_IMAGES)
-}).strict().superRefine((document2, context) => {
-  const totalBytes = document2.images.reduce((total, image) => total + image.byteLength, 0);
-  const totalPixels = document2.images.reduce(
-    (total, image) => total + image.width * image.height,
-    0
-  );
-  if (totalBytes > MAX_INLINE_IMAGE_TOTAL_BYTES) {
-    context.addIssue({ code: "custom", message: "The document exceeds the image byte limit" });
-  }
-  if (totalPixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
-    context.addIssue({ code: "custom", message: "The document exceeds the image pixel limit" });
-  }
-});
-var ErrorReviewDocumentSchema = external_exports.object({
-  kind: external_exports.literal("markdown-review-document"),
-  error: external_exports.string().min(1),
-  path: PathSchema.optional(),
-  reviewSessionId: external_exports.uuid().optional()
-}).strict();
-var ReviewImageChunkRequestSchema = external_exports.object({
-  reviewSessionId: external_exports.uuid(),
-  revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
-  imageId: external_exports.string().min(1).max(128),
-  chunkIndex: NonNegativeSafeIntegerSchema
-}).strict();
-var ReviewImageChunkSummarySchema = external_exports.object({
-  kind: external_exports.literal("markdown-review-image-chunk"),
-  reviewSessionId: external_exports.uuid(),
-  revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
-  imageId: external_exports.string().min(1).max(128),
-  imageRevision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
-  mimeType: external_exports.literal("image/png"),
-  chunkIndex: NonNegativeSafeIntegerSchema,
-  chunkCount: PositiveSafeIntegerSchema,
-  byteOffset: NonNegativeSafeIntegerSchema.max(MAX_INLINE_IMAGE_BYTES),
-  byteLength: PositiveSafeIntegerSchema.max(IMAGE_CHUNK_BYTES)
-}).strict();
-var PrivateReviewImageChunkSchema = ReviewImageChunkSummarySchema.extend({
-  data: external_exports.string().min(1).max(MAX_BASE64_CHUNK_LENGTH).regex(/^[A-Za-z0-9+/]*={0,2}$/)
-}).strict();
-var ReviewSelectionSchema = external_exports.object({
-  startLine: PositiveSafeIntegerSchema,
-  endLine: PositiveSafeIntegerSchema,
-  anchorX: external_exports.number().min(0).max(1),
-  anchorY: external_exports.number().min(0).max(1),
-  quote: external_exports.string().max(MAX_QUOTE_LENGTH)
-}).strict().refine((selection) => selection.endLine >= selection.startLine, {
-  message: "endLine must be greater than or equal to startLine",
-  path: ["endLine"]
-});
-var QueuedFeedbackSchema = ReviewSelectionSchema.extend({
-  id: external_exports.string().min(1).max(MAX_QUEUE_ID_LENGTH),
-  serial: PositiveSafeIntegerSchema,
-  path: PathSchema,
-  revision: RevisionSchema,
-  feedback: external_exports.string().min(1).max(MAX_FEEDBACK_LENGTH),
-  createdAt: TimestampSchema
-}).strict();
-var LastSubmissionSchema = external_exports.object({
-  count: PositiveSafeIntegerSchema.max(MAX_QUEUE_ITEMS),
-  path: PathSchema,
-  revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
-  submittedAt: TimestampSchema
-}).strict();
-var ReviewBatchItemSchema = external_exports.object({
-  id: CommentReferenceSchema,
-  refs: external_exports.array(CommentReferenceSchema),
-  lines: external_exports.tuple([PositiveSafeIntegerSchema, PositiveSafeIntegerSchema]).refine(([startLine, endLine]) => endLine >= startLine, {
-    message: "The ending line must not precede the starting line"
-  }),
-  quote: external_exports.string().max(MAX_QUOTE_LENGTH),
-  comment: external_exports.string().max(MAX_FEEDBACK_LENGTH),
-  revision: RevisionSchema.optional()
-}).strict();
-var ReviewBatchV1Schema = external_exports.object({
-  schema: external_exports.literal("markdown-review/v1"),
-  file: PathSchema,
-  revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
-  items: external_exports.array(ReviewBatchItemSchema).min(1).max(MAX_QUEUE_ITEMS),
-  missingRefs: external_exports.array(CommentReferenceSchema).optional()
-}).strict();
-var ReviewSubmissionSchema = external_exports.object({
-  submissionId: external_exports.string().min(1).max(200),
-  itemIds: external_exports.array(external_exports.string().min(1).max(MAX_QUEUE_ID_LENGTH)).min(1).max(MAX_QUEUE_ITEMS),
-  batch: ReviewBatchV1Schema
-}).strict().refine((submission) => new Set(submission.itemIds).size === submission.itemIds.length, {
-  message: "itemIds must be unique",
-  path: ["itemIds"]
-});
-var PersistedReviewStateSchema = external_exports.object({
-  path: PathSchema.nullable(),
-  theme: external_exports.enum(["light", "dark"]),
-  queue: external_exports.array(QueuedFeedbackSchema).max(MAX_QUEUE_ITEMS).refine((queue) => new Set(queue.map((item) => item.id)).size === queue.length, {
-    message: "Queue item IDs must be unique"
-  }).refine((queue) => new Set(queue.map((item) => item.serial)).size === queue.length, {
-    message: "Queue comment serials must be unique"
-  }),
-  nextSerial: PositiveSafeIntegerSchema,
-  lastSubmission: LastSubmissionSchema.nullable(),
-  pendingSubmission: ReviewSubmissionSchema.nullable().default(null)
-}).strict().superRefine((state, context) => {
-  if (state.queue.length > 0 && (!state.path || state.queue.some((item) => item.path !== state.path))) {
-    context.addIssue({
-      code: "custom",
-      message: "Every queued comment must match the review state path",
-      path: ["queue"]
-    });
-  }
-  const largestSerial = state.queue.reduce((largest, item) => Math.max(largest, item.serial), 0);
-  if (state.nextSerial <= largestSerial) {
-    context.addIssue({
-      code: "custom",
-      message: "nextSerial must be greater than every queued comment serial",
-      path: ["nextSerial"]
-    });
-  }
-});
-
-// packages/markdown-node/src/bounded-read.ts
-var import_promises2 = require("node:fs/promises");
-var import_node_fs = require("node:fs");
-var READ_CHUNK_BYTES = 64 * 1024;
-function sameFileSnapshot(before, after, bytesRead) {
-  return before.dev === after.dev && before.ino === after.ino && before.size === after.size && after.size === bytesRead && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs;
-}
-async function readFileHandleBounded(filePath, maximumBytes, label) {
-  const noFollow = typeof import_node_fs.constants.O_NOFOLLOW === "number" ? import_node_fs.constants.O_NOFOLLOW : 0;
-  const handle = await (0, import_promises2.open)(filePath, import_node_fs.constants.O_RDONLY | noFollow);
-  try {
-    const before = await handle.stat();
-    if (!before.isFile()) throw new Error(`${label} must be a regular file.`);
-    if (before.size > maximumBytes)
-      throw new Error(`${label} exceeds the ${maximumBytes}-byte limit.`);
-    const chunks = [];
-    let totalBytes = 0;
-    for (; ; ) {
-      const remaining = maximumBytes + 1 - totalBytes;
-      if (remaining <= 0) throw new Error(`${label} exceeds the ${maximumBytes}-byte limit.`);
-      const buffer = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, remaining));
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (bytesRead === 0) break;
-      totalBytes += bytesRead;
-      if (totalBytes > maximumBytes)
-        throw new Error(`${label} exceeds the ${maximumBytes}-byte limit.`);
-      chunks.push(buffer.subarray(0, bytesRead));
-    }
-    const after = await handle.stat();
-    if (!sameFileSnapshot(before, after, totalBytes)) {
-      throw new Error(`${label} changed while it was being read; retry the review.`);
-    }
-    return {
-      bytes: Buffer.concat(chunks, totalBytes),
-      modifiedAt: after.mtime.toISOString(),
-      sizeBytes: totalBytes
-    };
-  } finally {
-    await handle.close();
-  }
-}
-
-// packages/markdown-node/src/constants.ts
-var MAX_MARKDOWN_BYTES = 2 * 1024 * 1024;
-var MAX_REVIEW_SESSIONS = 6;
-var MAX_REVIEW_SESSION_IMAGE_BYTES = 72 * 1024 * 1024;
-var REVIEW_SESSION_TTL_MS = 2 * 60 * 60 * 1e3;
-
-// packages/markdown-node/src/path-policy.ts
-var import_promises3 = require("node:fs/promises");
-var import_node_path = require("node:path");
-function isWithinDirectory(directory, candidate) {
-  const fromDirectory = (0, import_node_path.relative)(directory, candidate);
-  return fromDirectory !== "" && fromDirectory !== ".." && !fromDirectory.startsWith(`..${import_node_path.sep}`) && !(0, import_node_path.isAbsolute)(fromDirectory);
-}
-var DefaultMarkdownPathPolicy = class {
-  async resolveMarkdownPath(pathInput) {
-    if (!(0, import_node_path.isAbsolute)(pathInput)) throw new Error("Pass an absolute Markdown file path.");
-    const requestedPath = (0, import_node_path.resolve)(pathInput);
-    if (![".md", ".markdown"].includes((0, import_node_path.extname)(requestedPath).toLowerCase())) {
-      throw new Error("Markdown Review only opens .md and .markdown files.");
-    }
-    const canonicalPath = await (0, import_promises3.realpath)(requestedPath);
-    if (![".md", ".markdown"].includes((0, import_node_path.extname)(canonicalPath).toLowerCase())) {
-      throw new Error("The resolved file must also be a .md or .markdown file.");
-    }
-    return canonicalPath;
-  }
-  async resolveLocalImagePath(markdownPath, source) {
-    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(source) || (0, import_node_path.isAbsolute)(source)) {
-      throw new Error("only relative local PNG paths are supported");
-    }
-    const pathWithoutSuffix = source.split(/[?#]/, 1)[0] ?? "";
-    let decodedPath;
-    try {
-      decodedPath = decodeURIComponent(pathWithoutSuffix);
-    } catch {
-      throw new Error("the path is invalid");
-    }
-    if (!decodedPath || decodedPath.includes("\0") || (0, import_node_path.isAbsolute)(decodedPath)) {
-      throw new Error("the path is invalid");
-    }
-    const documentDirectory = await (0, import_promises3.realpath)((0, import_node_path.dirname)(markdownPath));
-    const candidate = await (0, import_promises3.realpath)((0, import_node_path.resolve)(documentDirectory, decodedPath));
-    if (!isWithinDirectory(documentDirectory, candidate)) {
-      throw new Error("the path is outside the Markdown folder");
-    }
-    if ((0, import_node_path.extname)(candidate).toLowerCase() !== ".png") {
-      throw new Error("use a PNG file for local review images");
-    }
-    return candidate;
-  }
-};
-
 // node_modules/fflate/esm/index.mjs
 var import_module = require("module");
 var require2 = (0, import_module.createRequire)("/");
@@ -40143,6 +39878,521 @@ try {
   tds = 1;
 } catch (e) {
 }
+
+// packages/contracts/src/png-safety.ts
+var MAX_IMAGE_DIMENSION = 8192;
+var MAX_IMAGE_PIXELS = 16e6;
+var MAX_IMAGE_DECODED_BYTES = 64 * 1024 * 1024;
+var PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
+var INFLATE_INPUT_CHUNK_BYTES = 1024;
+var MAX_PNG_CHUNKS = 1024;
+var MAX_PNG_IDAT_CHUNKS = 256;
+var MAX_PNG_PALETTE_BYTES = 256 * 3;
+var FORBIDDEN_CHUNKS = /* @__PURE__ */ new Set(["acTL", "fcTL", "fdAT", "iCCP"]);
+function pngSafetyInfo(scanned) {
+  return {
+    width: scanned.width,
+    height: scanned.height,
+    pixels: scanned.pixels,
+    bitDepth: scanned.bitDepth,
+    colorType: scanned.colorType,
+    channels: scanned.channels,
+    decodedBytes: scanned.decodedBytes,
+    expectedInflatedBytes: scanned.expectedInflatedBytes
+  };
+}
+function chunkType(bytes, offset) {
+  return String.fromCharCode(
+    bytes[offset] ?? 0,
+    bytes[offset + 1] ?? 0,
+    bytes[offset + 2] ?? 0,
+    bytes[offset + 3] ?? 0
+  );
+}
+function channelCount(colorType) {
+  switch (colorType) {
+    case 0:
+    case 3:
+      return 1;
+    case 4:
+      return 2;
+    case 2:
+      return 3;
+    case 6:
+      return 4;
+    default:
+      throw new Error(`The PNG uses unsupported color type ${colorType}.`);
+  }
+}
+function validBitDepth(colorType, bitDepth) {
+  if (colorType === 0) return [1, 2, 4, 8, 16].includes(bitDepth);
+  if (colorType === 3) return [1, 2, 4, 8].includes(bitDepth);
+  return [2, 4, 6].includes(colorType) && [8, 16].includes(bitDepth);
+}
+function passSize(size, start, step) {
+  return size <= start ? 0 : Math.ceil((size - start) / step);
+}
+function scanlineBytes(width, channels, bitDepth) {
+  return Math.ceil(width * channels * bitDepth / 8);
+}
+function expectedInflatedBytes(width, height, channels, bitDepth, interlace) {
+  if (interlace === 0) return height * (1 + scanlineBytes(width, channels, bitDepth));
+  if (interlace !== 1) throw new Error(`The PNG uses unsupported interlace method ${interlace}.`);
+  const passes = [
+    [0, 0, 8, 8],
+    [4, 0, 8, 8],
+    [0, 4, 4, 8],
+    [2, 0, 4, 4],
+    [0, 2, 2, 4],
+    [1, 0, 2, 2],
+    [0, 1, 1, 2]
+  ];
+  return passes.reduce((total, [startX, startY, stepX, stepY]) => {
+    const passWidth = passSize(width, startX, stepX);
+    const passHeight = passSize(height, startY, stepY);
+    return passWidth === 0 || passHeight === 0 ? total : total + passHeight * (1 + scanlineBytes(passWidth, channels, bitDepth));
+  }, 0);
+}
+function scanPng(bytes) {
+  if (bytes.length < 45 || PNG_SIGNATURE.some((value, index) => bytes[index] !== value) || chunkType(bytes, 12) !== "IHDR") {
+    throw new Error("The file is not a valid PNG.");
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint32(8, false) !== 13) throw new Error("The PNG has an invalid IHDR chunk.");
+  const width = view.getUint32(16, false);
+  const height = view.getUint32(20, false);
+  const bitDepth = bytes[24] ?? 0;
+  const colorType = bytes[25] ?? -1;
+  const compression = bytes[26] ?? -1;
+  const filter2 = bytes[27] ?? -1;
+  const interlace = bytes[28] ?? -1;
+  if (!width || !height) throw new Error("The PNG has invalid dimensions.");
+  const pixels = width * height;
+  if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION || pixels > MAX_IMAGE_PIXELS) {
+    throw new Error("The PNG decoded dimensions exceed the safety limit.");
+  }
+  const channels = channelCount(colorType);
+  if (!validBitDepth(colorType, bitDepth)) {
+    throw new Error(`The PNG uses invalid bit depth ${bitDepth} for color type ${colorType}.`);
+  }
+  if (bitDepth !== 8) throw new Error("Only 8-bit PNG samples are supported.");
+  if (compression !== 0 || filter2 !== 0) {
+    throw new Error("The PNG uses unsupported compression or filtering.");
+  }
+  const decodedBytes = pixels * channels;
+  if (decodedBytes > MAX_IMAGE_DECODED_BYTES) {
+    throw new Error("The PNG decoded samples exceed the memory limit.");
+  }
+  const inflatedBytes = expectedInflatedBytes(width, height, channels, bitDepth, interlace);
+  if (inflatedBytes > MAX_IMAGE_DECODED_BYTES + MAX_IMAGE_DIMENSION * 7) {
+    throw new Error("The PNG inflated image data exceeds the memory limit.");
+  }
+  const imageData = [];
+  let offset = 8;
+  let chunkCount = 0;
+  let ihdrCount = 0;
+  let paletteCount = 0;
+  let paletteEntries = 0;
+  let transparencyCount = 0;
+  let foundImageData = false;
+  let finishedImageData = false;
+  let foundEnd = false;
+  while (offset + 12 <= bytes.length) {
+    chunkCount += 1;
+    if (chunkCount > MAX_PNG_CHUNKS) {
+      throw new Error(`The PNG contains more than ${MAX_PNG_CHUNKS} chunks.`);
+    }
+    const length = view.getUint32(offset, false);
+    const type = chunkType(bytes, offset + 4);
+    const dataStart = offset + 8;
+    const nextOffset = dataStart + length + 4;
+    if (!Number.isSafeInteger(nextOffset) || nextOffset > bytes.length) {
+      throw new Error(`The PNG ${type || "unknown"} chunk is truncated.`);
+    }
+    if (type === "IHDR") ihdrCount += 1;
+    if (FORBIDDEN_CHUNKS.has(type)) {
+      throw new Error(
+        type === "iCCP" ? "Embedded PNG color profiles are not supported." : "Animated PNG chunks are not supported."
+      );
+    }
+    if (foundImageData && type !== "IDAT" && type !== "IEND") finishedImageData = true;
+    if (type === "PLTE") {
+      paletteCount += 1;
+      if (paletteCount > 1) throw new Error("The PNG contains more than one color palette.");
+      if (foundImageData) throw new Error("The PNG color palette must precede image data.");
+      if (colorType === 0 || colorType === 4) {
+        throw new Error("Grayscale PNGs cannot contain a color palette.");
+      }
+      if (length < 3 || length > MAX_PNG_PALETTE_BYTES || length % 3 !== 0) {
+        throw new Error("The PNG color palette must contain 1 to 256 RGB entries.");
+      }
+      if (colorType === 3 && length / 3 > 2 ** bitDepth) {
+        throw new Error("The PNG color palette has more entries than its bit depth permits.");
+      }
+      paletteEntries = length / 3;
+    }
+    if (type === "tRNS") {
+      transparencyCount += 1;
+      if (transparencyCount > 1) {
+        throw new Error("The PNG contains more than one transparency chunk.");
+      }
+      if (foundImageData) throw new Error("PNG transparency metadata must precede image data.");
+      if (colorType !== 3) {
+        throw new Error(
+          "PNG color-key transparency is not supported; use an explicit alpha channel."
+        );
+      }
+      if (paletteCount !== 1 || length < 1 || length > paletteEntries) {
+        throw new Error("Indexed PNG transparency must match its preceding color palette.");
+      }
+    }
+    if (type === "IDAT") {
+      if (finishedImageData) throw new Error("The PNG image-data chunks must be consecutive.");
+      foundImageData = true;
+      if (imageData.length >= MAX_PNG_IDAT_CHUNKS) {
+        throw new Error(`The PNG contains more than ${MAX_PNG_IDAT_CHUNKS} image-data chunks.`);
+      }
+      imageData.push(bytes.subarray(dataStart, dataStart + length));
+    }
+    if (type === "IEND") {
+      if (length !== 0) throw new Error("The PNG has an invalid IEND chunk.");
+      foundEnd = true;
+      offset = nextOffset;
+      break;
+    }
+    offset = nextOffset;
+  }
+  if (ihdrCount !== 1 || imageData.length === 0 || !foundEnd || offset !== bytes.length) {
+    throw new Error("The PNG chunk structure is incomplete or invalid.");
+  }
+  if (colorType === 3 && paletteCount !== 1) {
+    throw new Error("Indexed-color PNGs require one color palette.");
+  }
+  return {
+    width,
+    height,
+    pixels,
+    bitDepth,
+    colorType,
+    channels,
+    decodedBytes,
+    expectedInflatedBytes: inflatedBytes,
+    imageData
+  };
+}
+function inspectPngSafety(bytes) {
+  return pngSafetyInfo(scanPng(bytes));
+}
+function validatePngSafety(bytes) {
+  const scanned = scanPng(bytes);
+  let inflatedBytes = 0;
+  const inflator = new Unzlib((chunk) => {
+    inflatedBytes += chunk.length;
+    if (inflatedBytes > scanned.expectedInflatedBytes) {
+      throw new Error("The PNG image data expands beyond its decoded-size limit.");
+    }
+  });
+  try {
+    for (const data of scanned.imageData) {
+      for (let offset = 0; offset < data.length; offset += INFLATE_INPUT_CHUNK_BYTES) {
+        inflator.push(data.subarray(offset, offset + INFLATE_INPUT_CHUNK_BYTES), false);
+      }
+    }
+    inflator.push(new Uint8Array(0), true);
+  } catch (error51) {
+    const reason = error51 instanceof Error ? error51.message : "image data decompression failed";
+    throw new Error(`The PNG image data could not be decompressed safely: ${reason}.`);
+  }
+  if (inflatedBytes !== scanned.expectedInflatedBytes) {
+    throw new Error("The PNG image data length does not match its dimensions.");
+  }
+  return pngSafetyInfo(scanned);
+}
+
+// packages/contracts/src/index.ts
+var MAX_QUEUE_ITEMS = 20;
+var MAX_PATH_LENGTH = 4096;
+var MAX_QUEUE_ID_LENGTH = 120;
+var MAX_REVISION_LENGTH = 128;
+var MAX_QUOTE_LENGTH = 1400;
+var MAX_FEEDBACK_LENGTH = 2400;
+var MAX_DOCUMENT_TITLE_LENGTH = 256;
+var MAX_RENDERED_HTML_LENGTH = 16 * 1024 * 1024;
+var MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
+var MAX_INLINE_IMAGE_TOTAL_BYTES = 12 * 1024 * 1024;
+var MAX_INLINE_IMAGE_REFERENCES = 64;
+var MAX_INLINE_IMAGES = MAX_INLINE_IMAGE_REFERENCES;
+var MAX_INLINE_IMAGE_TOTAL_PIXELS = 24e6;
+var IMAGE_CHUNK_BYTES = 24 * 1024;
+var MAX_IMAGE_CHUNKS = Math.ceil(MAX_INLINE_IMAGE_BYTES / IMAGE_CHUNK_BYTES);
+var MAX_BASE64_CHUNK_LENGTH = Math.ceil(IMAGE_CHUNK_BYTES / 3) * 4;
+var NonNegativeSafeIntegerSchema = external_exports.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+var PositiveSafeIntegerSchema = external_exports.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
+var PathSchema = external_exports.string().min(1).max(MAX_PATH_LENGTH);
+var RevisionSchema = external_exports.string().max(MAX_REVISION_LENGTH);
+var TimestampSchema = external_exports.string().min(1).max(128);
+var CommentReferenceSchema = external_exports.string().regex(/^#[1-9]\d*$/);
+var ReviewDocumentIdentitySchema = external_exports.object({
+  path: PathSchema,
+  revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH)
+}).strict();
+var ReviewDocumentSummarySchema = ReviewDocumentIdentitySchema.extend({
+  filename: external_exports.string().min(1).max(MAX_PATH_LENGTH),
+  title: external_exports.string().min(1).max(MAX_DOCUMENT_TITLE_LENGTH),
+  modifiedAt: TimestampSchema,
+  sizeBytes: NonNegativeSafeIntegerSchema,
+  lineCount: NonNegativeSafeIntegerSchema,
+  blockCount: NonNegativeSafeIntegerSchema
+}).strict();
+var ReviewImageDescriptorSchema = external_exports.object({
+  id: external_exports.string().min(1).max(128),
+  mimeType: external_exports.literal("image/png"),
+  revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
+  modifiedAt: TimestampSchema,
+  byteLength: PositiveSafeIntegerSchema.max(MAX_INLINE_IMAGE_BYTES),
+  chunkCount: PositiveSafeIntegerSchema.max(MAX_IMAGE_CHUNKS),
+  width: PositiveSafeIntegerSchema.max(MAX_IMAGE_DIMENSION),
+  height: PositiveSafeIntegerSchema.max(MAX_IMAGE_DIMENSION)
+}).strict().refine((image) => image.width * image.height <= MAX_IMAGE_PIXELS, {
+  message: "The decoded image exceeds the pixel limit"
+});
+var ReviewDocumentSchema = ReviewDocumentSummarySchema.extend({
+  kind: external_exports.literal("markdown-review-document"),
+  reviewSessionId: external_exports.uuid(),
+  html: external_exports.string().max(MAX_RENDERED_HTML_LENGTH),
+  images: external_exports.array(ReviewImageDescriptorSchema).max(MAX_INLINE_IMAGES)
+}).strict().superRefine((document2, context) => {
+  const imageIds = /* @__PURE__ */ new Set();
+  for (const [index, image] of document2.images.entries()) {
+    if (imageIds.has(image.id)) {
+      context.addIssue({
+        code: "custom",
+        message: "Image descriptor IDs must be unique",
+        path: ["images", index, "id"]
+      });
+    }
+    imageIds.add(image.id);
+  }
+  const totalBytes = document2.images.reduce((total, image) => total + image.byteLength, 0);
+  const totalPixels = document2.images.reduce(
+    (total, image) => total + image.width * image.height,
+    0
+  );
+  if (totalBytes > MAX_INLINE_IMAGE_TOTAL_BYTES) {
+    context.addIssue({ code: "custom", message: "The document exceeds the image byte limit" });
+  }
+  if (totalPixels > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
+    context.addIssue({ code: "custom", message: "The document exceeds the image pixel limit" });
+  }
+});
+var ErrorReviewDocumentSchema = external_exports.object({
+  kind: external_exports.literal("markdown-review-document"),
+  error: external_exports.string().min(1),
+  path: PathSchema.optional(),
+  reviewSessionId: external_exports.uuid().optional()
+}).strict();
+var ReviewImageChunkRequestSchema = external_exports.object({
+  reviewSessionId: external_exports.uuid(),
+  revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
+  imageId: external_exports.string().min(1).max(128),
+  chunkIndex: NonNegativeSafeIntegerSchema
+}).strict();
+var ReviewImageChunkSummarySchema = external_exports.object({
+  kind: external_exports.literal("markdown-review-image-chunk"),
+  reviewSessionId: external_exports.uuid(),
+  revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
+  imageId: external_exports.string().min(1).max(128),
+  imageRevision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
+  mimeType: external_exports.literal("image/png"),
+  chunkIndex: NonNegativeSafeIntegerSchema,
+  chunkCount: PositiveSafeIntegerSchema,
+  byteOffset: NonNegativeSafeIntegerSchema.max(MAX_INLINE_IMAGE_BYTES),
+  byteLength: PositiveSafeIntegerSchema.max(IMAGE_CHUNK_BYTES)
+}).strict();
+var PrivateReviewImageChunkSchema = ReviewImageChunkSummarySchema.extend({
+  data: external_exports.string().min(1).max(MAX_BASE64_CHUNK_LENGTH).regex(/^[A-Za-z0-9+/]*={0,2}$/)
+}).strict();
+var ReviewSelectionSchema = external_exports.object({
+  startLine: PositiveSafeIntegerSchema,
+  endLine: PositiveSafeIntegerSchema,
+  anchorX: external_exports.number().min(0).max(1),
+  anchorY: external_exports.number().min(0).max(1),
+  quote: external_exports.string().max(MAX_QUOTE_LENGTH)
+}).strict().refine((selection) => selection.endLine >= selection.startLine, {
+  message: "endLine must be greater than or equal to startLine",
+  path: ["endLine"]
+});
+var QueuedFeedbackSchema = ReviewSelectionSchema.extend({
+  id: external_exports.string().min(1).max(MAX_QUEUE_ID_LENGTH),
+  serial: PositiveSafeIntegerSchema,
+  path: PathSchema,
+  revision: RevisionSchema,
+  feedback: external_exports.string().min(1).max(MAX_FEEDBACK_LENGTH),
+  createdAt: TimestampSchema
+}).strict();
+var LastSubmissionSchema = external_exports.object({
+  count: PositiveSafeIntegerSchema.max(MAX_QUEUE_ITEMS),
+  path: PathSchema,
+  revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
+  submittedAt: TimestampSchema
+}).strict();
+var ReviewBatchItemSchema = external_exports.object({
+  id: CommentReferenceSchema,
+  refs: external_exports.array(CommentReferenceSchema),
+  lines: external_exports.tuple([PositiveSafeIntegerSchema, PositiveSafeIntegerSchema]).refine(([startLine, endLine]) => endLine >= startLine, {
+    message: "The ending line must not precede the starting line"
+  }),
+  quote: external_exports.string().max(MAX_QUOTE_LENGTH),
+  comment: external_exports.string().max(MAX_FEEDBACK_LENGTH),
+  revision: RevisionSchema.optional()
+}).strict();
+var ReviewBatchV1Schema = external_exports.object({
+  schema: external_exports.literal("markdown-review/v1"),
+  file: PathSchema,
+  revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
+  items: external_exports.array(ReviewBatchItemSchema).min(1).max(MAX_QUEUE_ITEMS),
+  missingRefs: external_exports.array(CommentReferenceSchema).optional()
+}).strict();
+var ReviewSubmissionSchema = external_exports.object({
+  submissionId: external_exports.string().min(1).max(200),
+  itemIds: external_exports.array(external_exports.string().min(1).max(MAX_QUEUE_ID_LENGTH)).min(1).max(MAX_QUEUE_ITEMS),
+  batch: ReviewBatchV1Schema
+}).strict().refine((submission) => new Set(submission.itemIds).size === submission.itemIds.length, {
+  message: "itemIds must be unique",
+  path: ["itemIds"]
+});
+var PersistedReviewStateSchema = external_exports.object({
+  path: PathSchema.nullable(),
+  theme: external_exports.enum(["light", "dark"]),
+  queue: external_exports.array(QueuedFeedbackSchema).max(MAX_QUEUE_ITEMS).refine((queue) => new Set(queue.map((item) => item.id)).size === queue.length, {
+    message: "Queue item IDs must be unique"
+  }).refine((queue) => new Set(queue.map((item) => item.serial)).size === queue.length, {
+    message: "Queue comment serials must be unique"
+  }),
+  nextSerial: PositiveSafeIntegerSchema,
+  lastSubmission: LastSubmissionSchema.nullable(),
+  pendingSubmission: ReviewSubmissionSchema.nullable().default(null)
+}).strict().superRefine((state, context) => {
+  if (state.queue.length > 0 && (!state.path || state.queue.some((item) => item.path !== state.path))) {
+    context.addIssue({
+      code: "custom",
+      message: "Every queued comment must match the review state path",
+      path: ["queue"]
+    });
+  }
+  const largestSerial = state.queue.reduce((largest, item) => Math.max(largest, item.serial), 0);
+  if (state.nextSerial <= largestSerial) {
+    context.addIssue({
+      code: "custom",
+      message: "nextSerial must be greater than every queued comment serial",
+      path: ["nextSerial"]
+    });
+  }
+});
+
+// packages/markdown-node/src/bounded-read.ts
+var import_promises2 = require("node:fs/promises");
+var import_node_fs = require("node:fs");
+var READ_CHUNK_BYTES = 64 * 1024;
+function sameFileSnapshot(before, after, bytesRead) {
+  return before.dev === after.dev && before.ino === after.ino && before.size === after.size && after.size === bytesRead && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs;
+}
+async function assertOpenedPath(filePath, expectedCanonicalPath, opened, label) {
+  if (!expectedCanonicalPath) return;
+  const canonicalPath = await (0, import_promises2.realpath)(filePath);
+  const pathInfo = await (0, import_promises2.stat)(filePath);
+  if (canonicalPath !== expectedCanonicalPath || pathInfo.dev !== opened.dev || pathInfo.ino !== opened.ino) {
+    throw new Error(`${label} path changed while it was being opened; retry the review.`);
+  }
+}
+async function readFileHandleBounded(filePath, maximumBytes, label, options = {}) {
+  const noFollow = typeof import_node_fs.constants.O_NOFOLLOW === "number" ? import_node_fs.constants.O_NOFOLLOW : 0;
+  const handle = await (0, import_promises2.open)(filePath, import_node_fs.constants.O_RDONLY | noFollow);
+  try {
+    const before = await handle.stat();
+    if (!before.isFile()) throw new Error(`${label} must be a regular file.`);
+    await assertOpenedPath(filePath, options.expectedCanonicalPath, before, label);
+    if (before.size > maximumBytes)
+      throw new Error(`${label} exceeds the ${maximumBytes}-byte limit.`);
+    const chunks = [];
+    let totalBytes = 0;
+    for (; ; ) {
+      const remaining = maximumBytes + 1 - totalBytes;
+      if (remaining <= 0) throw new Error(`${label} exceeds the ${maximumBytes}-byte limit.`);
+      const buffer = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, remaining));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      totalBytes += bytesRead;
+      if (totalBytes > maximumBytes)
+        throw new Error(`${label} exceeds the ${maximumBytes}-byte limit.`);
+      chunks.push(buffer.subarray(0, bytesRead));
+    }
+    const after = await handle.stat();
+    if (!sameFileSnapshot(before, after, totalBytes)) {
+      throw new Error(`${label} changed while it was being read; retry the review.`);
+    }
+    await assertOpenedPath(filePath, options.expectedCanonicalPath, after, label);
+    return {
+      bytes: Buffer.concat(chunks, totalBytes),
+      modifiedAt: after.mtime.toISOString(),
+      sizeBytes: totalBytes
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+// packages/markdown-node/src/constants.ts
+var MAX_MARKDOWN_BYTES = 2 * 1024 * 1024;
+var MAX_REVIEW_SESSIONS = 6;
+var MAX_REVIEW_SESSION_IMAGE_BYTES = 72 * 1024 * 1024;
+var REVIEW_SESSION_TTL_MS = 2 * 60 * 60 * 1e3;
+
+// packages/markdown-node/src/path-policy.ts
+var import_promises3 = require("node:fs/promises");
+var import_node_path = require("node:path");
+function isWithinDirectory(directory, candidate) {
+  const fromDirectory = (0, import_node_path.relative)(directory, candidate);
+  return fromDirectory !== "" && fromDirectory !== ".." && !fromDirectory.startsWith(`..${import_node_path.sep}`) && !(0, import_node_path.isAbsolute)(fromDirectory);
+}
+var DefaultMarkdownPathPolicy = class {
+  async resolveMarkdownPath(pathInput) {
+    if (!(0, import_node_path.isAbsolute)(pathInput)) throw new Error("Pass an absolute Markdown file path.");
+    const requestedPath = (0, import_node_path.resolve)(pathInput);
+    if (![".md", ".markdown"].includes((0, import_node_path.extname)(requestedPath).toLowerCase())) {
+      throw new Error("Markdown Review only opens .md and .markdown files.");
+    }
+    const canonicalPath = await (0, import_promises3.realpath)(requestedPath);
+    if (![".md", ".markdown"].includes((0, import_node_path.extname)(canonicalPath).toLowerCase())) {
+      throw new Error("The resolved file must also be a .md or .markdown file.");
+    }
+    return canonicalPath;
+  }
+  async resolveLocalImagePath(markdownPath, source) {
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(source) || (0, import_node_path.isAbsolute)(source)) {
+      throw new Error("only relative local PNG paths are supported");
+    }
+    const pathWithoutSuffix = source.split(/[?#]/, 1)[0] ?? "";
+    let decodedPath;
+    try {
+      decodedPath = decodeURIComponent(pathWithoutSuffix);
+    } catch {
+      throw new Error("the path is invalid");
+    }
+    if (!decodedPath || decodedPath.includes("\0") || (0, import_node_path.isAbsolute)(decodedPath)) {
+      throw new Error("the path is invalid");
+    }
+    const documentDirectory = await (0, import_promises3.realpath)((0, import_node_path.dirname)(markdownPath));
+    const candidate = await (0, import_promises3.realpath)((0, import_node_path.resolve)(documentDirectory, decodedPath));
+    if (!isWithinDirectory(documentDirectory, candidate)) {
+      throw new Error("the path is outside the Markdown folder");
+    }
+    if ((0, import_node_path.extname)(candidate).toLowerCase() !== ".png") {
+      throw new Error("use a PNG file for local review images");
+    }
+    return candidate;
+  }
+};
 
 // node_modules/iobuffer/lib/text.js
 function decode3(bytes, encoding = "utf8") {
@@ -41617,18 +41867,13 @@ function decodePng(data, options) {
 }
 
 // packages/markdown-node/src/png.ts
-var PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 function readPngDimensions(bytes) {
-  if (bytes.length < 24 || !bytes.subarray(0, 8).equals(PNG_SIGNATURE) || bytes.toString("ascii", 12, 16) !== "IHDR") {
-    throw new Error("The file is not a valid PNG.");
-  }
-  const width = bytes.readUInt32BE(16);
-  const height = bytes.readUInt32BE(20);
-  if (!width || !height) throw new Error("The PNG has invalid dimensions.");
-  return { width, height, pixels: width * height };
+  const { width, height, pixels } = inspectPngSafety(bytes);
+  return { width, height, pixels };
 }
 function validatePng(bytes, expected) {
   try {
+    validatePngSafety(bytes);
     const decoded = decodePng(bytes, { checkCrc: true });
     if (decoded.width !== expected.width || decoded.height !== expected.height) {
       throw new Error("the decoded dimensions do not match the PNG header");
@@ -42907,19 +43152,34 @@ function encodeHtmlAttribute(value) {
 function imageNotice(alt, message) {
   return `<span class="local-image image-notice" role="img" aria-label="${encodeHtmlAttribute(alt)}"><span class="local-image-status">${encodeHtmlAttribute(message)}</span></span>`;
 }
+function imagePlaceholder(alt, image) {
+  const { id, width, height } = image.descriptor;
+  return `<span class="local-image" data-local-image-id="${id}" data-alt="${encodeHtmlAttribute(alt)}" role="status" aria-live="polite" style="aspect-ratio:${width}/${height}"><span class="local-image-status">Image queued…</span></span>`;
+}
 async function snapshotImage(source, alt, markdownPath, budget, pathPolicy) {
-  if (budget.items.length >= MAX_INLINE_IMAGES) {
+  if (budget.references >= MAX_INLINE_IMAGE_REFERENCES) {
     return imageNotice(
       alt,
-      `Image not rendered: this review supports up to ${MAX_INLINE_IMAGES} local images.`
+      `Image not rendered: this review processes up to ${MAX_INLINE_IMAGE_REFERENCES} local image references.`
     );
   }
+  budget.references += 1;
   try {
     const imagePath = await pathPolicy.resolveLocalImagePath(markdownPath, source);
+    const existing = budget.snapshotsByPath.get(imagePath);
+    if (existing) {
+      const pixels2 = existing.descriptor.width * existing.descriptor.height;
+      if (budget.totalPixels + pixels2 > MAX_INLINE_IMAGE_TOTAL_PIXELS) {
+        throw new Error("the document exceeds the decoded image limit");
+      }
+      budget.totalPixels += pixels2;
+      return imagePlaceholder(alt, existing);
+    }
     const snapshot = await readFileHandleBounded(
       imagePath,
       MAX_INLINE_IMAGE_BYTES,
-      "The local image"
+      "The local image",
+      { expectedCanonicalPath: imagePath }
     );
     if (snapshot.sizeBytes === 0) throw new Error("the local file is empty or unavailable");
     if (budget.totalBytes + snapshot.sizeBytes > MAX_INLINE_IMAGE_TOTAL_BYTES) {
@@ -42945,10 +43205,12 @@ async function snapshotImage(source, alt, markdownPath, budget, pathPolicy) {
       width,
       height
     };
-    budget.items.push({ descriptor, bytes: snapshot.bytes, sha256 });
+    const stored = { descriptor, bytes: snapshot.bytes, sha256 };
+    budget.items.push(stored);
+    budget.snapshotsByPath.set(imagePath, stored);
     budget.totalBytes += snapshot.sizeBytes;
     budget.totalPixels += pixels;
-    return `<span class="local-image" data-local-image-id="${id}" data-alt="${encodeHtmlAttribute(alt)}" role="status" aria-live="polite" style="aspect-ratio:${width}/${height}"><span class="local-image-status">Image queued…</span></span>`;
+    return imagePlaceholder(alt, stored);
   } catch (error51) {
     const reason = error51 instanceof Error ? error51.message : "the local file could not be loaded";
     return imageNotice(alt, `Image not rendered: ${reason}.`);
@@ -42994,7 +43256,13 @@ function sanitizeRenderedHtml(html) {
 async function renderMarkdown(markdown, markdownPath, pathPolicy) {
   const tokens = f.lexer(markdown, { gfm: true });
   const blocks = [];
-  const budget = { items: [], totalBytes: 0, totalPixels: 0 };
+  const budget = {
+    items: [],
+    snapshotsByPath: /* @__PURE__ */ new Map(),
+    references: 0,
+    totalBytes: 0,
+    totalPixels: 0
+  };
   let cursor = 0;
   let cursorLine = 1;
   for (const token of tokens) {
@@ -43136,7 +43404,9 @@ var MarkdownReviewService = class {
   }
   async open(pathInput) {
     const path = await this.#pathPolicy.resolveMarkdownPath(pathInput);
-    const snapshot = await readFileHandleBounded(path, MAX_MARKDOWN_BYTES, "The Markdown file");
+    const snapshot = await readFileHandleBounded(path, MAX_MARKDOWN_BYTES, "The Markdown file", {
+      expectedCanonicalPath: path
+    });
     const markdown = snapshot.bytes.toString("utf8");
     const rendered = await renderMarkdown(markdown, path, this.#pathPolicy);
     const revision = (0, import_node_crypto3.createHash)("sha256").update(snapshot.bytes).digest("hex").slice(0, 16);

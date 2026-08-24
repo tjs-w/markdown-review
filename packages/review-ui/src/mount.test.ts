@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type {
-  PersistedReviewState,
-  PrivateReviewImageChunk,
-  QueuedFeedback,
-  ReviewDocument,
-  ReviewSubmission,
+import {
+  MAX_INLINE_IMAGE_REFERENCES,
+  type PersistedReviewState,
+  type PrivateReviewImageChunk,
+  type QueuedFeedback,
+  type ReviewDocument,
+  type ReviewSubmission,
 } from "@markdown-review/contracts";
 
 import { mountMarkdownReview } from "./mount";
@@ -141,6 +142,32 @@ function createHarness(options: HarnessOptions = {}) {
 async function settle(turns = 3): Promise<void> {
   for (let index = 0; index < turns; index += 1)
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+function installCanvasContext(): () => void {
+  const original = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "getContext");
+  Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+    configurable: true,
+    value() {
+      return {
+        createImageData(width: number, height: number) {
+          return { data: new Uint8ClampedArray(width * height * 4) };
+        },
+        putImageData(): void {
+          return undefined;
+        },
+      };
+    },
+  });
+  return () => {
+    if (original) Object.defineProperty(HTMLCanvasElement.prototype, "getContext", original);
+    else delete (HTMLCanvasElement.prototype as { getContext?: unknown }).getContext;
+  };
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", Uint8Array.from(bytes));
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 function selectText(blockIndex = 0): void {
@@ -571,10 +598,10 @@ describe("mountMarkdownReview", () => {
     let loads = 0;
     const imageDocument: ReviewDocument = {
       ...reviewDocument,
-      html: '<section class="review-block" data-start-line="1" data-end-line="1"><span class="local-image" data-local-image-id="image-1" data-alt="Diagram"><span class="local-image-status">Loading image…</span></span></section>',
+      html: '<section class="review-block" data-start-line="1" data-end-line="1"><span class="local-image" data-local-image-id="local-image-1" data-alt="Diagram"><span class="local-image-status">Loading image…</span></span></section>',
       images: [
         {
-          id: "image-1",
+          id: "local-image-1",
           mimeType: "image/png",
           revision: "0".repeat(64),
           modifiedAt: NOW,
@@ -592,7 +619,7 @@ describe("mountMarkdownReview", () => {
           kind: "markdown-review-image-chunk",
           reviewSessionId: SESSION,
           revision: imageDocument.revision,
-          imageId: "image-1",
+          imageId: "local-image-1",
           imageRevision: "0".repeat(64),
           mimeType: "image/png",
           chunkIndex: 0,
@@ -615,6 +642,131 @@ describe("mountMarkdownReview", () => {
     handle.destroy();
   });
 
+  test("shares one verified decode across duplicate placeholders and preserves occurrence alts", async () => {
+    installShell();
+    const restoreCanvas = installCanvasContext();
+    const bytes = Uint8Array.from([1, 2, 3]);
+    const imageRevision = await sha256Hex(bytes);
+    let loads = 0;
+    let decodes = 0;
+    const imageDocument: ReviewDocument = {
+      ...reviewDocument,
+      html:
+        '<section class="review-block" data-start-line="1" data-end-line="1">' +
+        '<span class="local-image" data-local-image-id="local-image-1" data-alt="First"></span>' +
+        '<span class="local-image" data-local-image-id="local-image-1" data-alt="Second"></span></section>',
+      images: [
+        {
+          id: "local-image-1",
+          mimeType: "image/png",
+          revision: imageRevision,
+          modifiedAt: NOW,
+          byteLength: bytes.length,
+          chunkCount: 1,
+          width: 1,
+          height: 1,
+        },
+      ],
+    };
+    const harness = createHarness({
+      loadAssetChunk() {
+        loads += 1;
+        return Promise.resolve({
+          kind: "markdown-review-image-chunk",
+          reviewSessionId: SESSION,
+          revision: imageDocument.revision,
+          imageId: "local-image-1",
+          imageRevision,
+          mimeType: "image/png",
+          chunkIndex: 0,
+          chunkCount: 1,
+          byteOffset: 0,
+          byteLength: bytes.length,
+          data: Buffer.from(bytes).toString("base64"),
+        });
+      },
+    });
+    const handle = mountMarkdownReview({
+      ports: harness.ports,
+      initialDocument: imageDocument,
+      imageDecoder: {
+        decodePng() {
+          decodes += 1;
+          return { width: 1, height: 1, data: Uint8ClampedArray.from([1, 2, 3, 255]) };
+        },
+      },
+    });
+    try {
+      await settle(6);
+      expect(loads).toBe(1);
+      expect(decodes).toBe(1);
+      expect(
+        [...document.querySelectorAll("canvas")].map((canvas) => canvas.getAttribute("aria-label")),
+      ).toEqual(["First", "Second"]);
+    } finally {
+      handle.destroy();
+      restoreCanvas();
+    }
+  });
+
+  test("enforces reference and rendered-pixel budgets on untrusted document HTML", async () => {
+    installShell();
+    const originalInnerHeight = Object.getOwnPropertyDescriptor(window, "innerHeight");
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 200 });
+    const descriptor = {
+      id: "local-image-1",
+      mimeType: "image/png" as const,
+      revision: "0".repeat(64),
+      modifiedAt: NOW,
+      byteLength: 1,
+      chunkCount: 1,
+      width: 1,
+      height: 1,
+    };
+    const referenceDocument: ReviewDocument = {
+      ...reviewDocument,
+      html:
+        '<section class="review-block" data-start-line="1" data-end-line="1">' +
+        Array.from(
+          { length: MAX_INLINE_IMAGE_REFERENCES + 1 },
+          (_, index) =>
+            `<span class="local-image" data-local-image-id="local-image-1" data-alt="Image ${index + 1}"></span>`,
+        ).join("") +
+        "</section>",
+      images: [descriptor],
+    };
+    const harness = createHarness();
+    const handle = mountMarkdownReview({
+      ports: harness.ports,
+      initialDocument: referenceDocument,
+    });
+    try {
+      await settle();
+      expect(document.querySelectorAll('[data-image-approved="true"]')).toHaveLength(
+        MAX_INLINE_IMAGE_REFERENCES,
+      );
+      expect(document.querySelector(".is-error")?.textContent).toContain(
+        `up to ${MAX_INLINE_IMAGE_REFERENCES} local image references`,
+      );
+
+      await handle.openDocument({
+        ...referenceDocument,
+        revision: "pixel-budget",
+        html:
+          '<section class="review-block" data-start-line="1" data-end-line="1">' +
+          '<span class="local-image" data-local-image-id="local-image-1" data-alt="Large one"></span>' +
+          '<span class="local-image" data-local-image-id="local-image-1" data-alt="Large two"></span></section>',
+        images: [{ ...descriptor, width: 4_000, height: 4_000 }],
+      });
+      expect(document.querySelectorAll('[data-image-approved="true"]')).toHaveLength(1);
+      expect(document.querySelector(".is-error")?.textContent).toContain("decoded image limit");
+    } finally {
+      handle.destroy();
+      if (originalInnerHeight) Object.defineProperty(window, "innerHeight", originalInnerHeight);
+      else delete (window as { innerHeight?: number }).innerHeight;
+    }
+  });
+
   test("ignores image results superseded by refresh", async () => {
     installShell();
     let resolveChunk: ((chunk: PrivateReviewImageChunk) => void) | undefined;
@@ -623,10 +775,10 @@ describe("mountMarkdownReview", () => {
     });
     const imageDocument: ReviewDocument = {
       ...reviewDocument,
-      html: '<section class="review-block" data-start-line="1" data-end-line="1"><span class="local-image" data-local-image-id="image-1" data-alt="Diagram"></span></section>',
+      html: '<section class="review-block" data-start-line="1" data-end-line="1"><span class="local-image" data-local-image-id="local-image-1" data-alt="Diagram"></span></section>',
       images: [
         {
-          id: "image-1",
+          id: "local-image-1",
           mimeType: "image/png",
           revision: "0".repeat(64),
           modifiedAt: NOW,
@@ -649,7 +801,7 @@ describe("mountMarkdownReview", () => {
       kind: "markdown-review-image-chunk",
       reviewSessionId: SESSION,
       revision: imageDocument.revision,
-      imageId: "image-1",
+      imageId: "local-image-1",
       imageRevision: "0".repeat(64),
       mimeType: "image/png",
       chunkIndex: 0,

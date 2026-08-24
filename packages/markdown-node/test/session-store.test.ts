@@ -83,11 +83,11 @@ describe("ReviewSessionStore", () => {
       maximumImageBytes: 5,
       createId: () => IDS[nextId++] ?? crypto.randomUUID(),
     });
-    const firstImage = storedImage("one", 3);
+    const firstImage = storedImage("local-image-1", 3);
     const first = store.create({ ...document("/tmp/one.md"), images: [firstImage.descriptor] }, [
       firstImage,
     ]);
-    const secondImage = storedImage("two", 3);
+    const secondImage = storedImage("local-image-2", 3);
     store.create({ ...document("/tmp/two.md"), images: [secondImage.descriptor] }, [secondImage]);
 
     expect(store.imageBytes).toBe(3);

@@ -1,3 +1,4 @@
+import { validatePngSafety } from "@markdown-review/contracts/png-safety";
 import { decode } from "fast-png";
 
 export interface DecodedPng {
@@ -19,14 +20,23 @@ function sampleAt(
 }
 
 export function decodePng(bytes: Uint8Array): DecodedPng {
-  const decoded = decode(bytes);
+  const safety = validatePngSafety(bytes);
+  const decoded = decode(bytes, { checkCrc: true });
   const { width, height, channels, depth, data } = decoded;
   const rgba = new Uint8ClampedArray(width * height * 4);
 
   for (let pixel = 0; pixel < width * height; pixel += 1) {
     const source = pixel * channels;
     const target = pixel * 4;
-    if (channels === 1) {
+    if (safety.colorType === 3) {
+      const paletteIndex = data[pixel];
+      const color = paletteIndex === undefined ? undefined : decoded.palette?.[paletteIndex];
+      if (!color) throw new Error("PNG palette data is incomplete");
+      rgba[target] = color[0] ?? 0;
+      rgba[target + 1] = color[1] ?? 0;
+      rgba[target + 2] = color[2] ?? 0;
+      rgba[target + 3] = color[3] ?? 255;
+    } else if (channels === 1) {
       const gray = sampleAt(data, source, depth);
       rgba[target] = gray;
       rgba[target + 1] = gray;
