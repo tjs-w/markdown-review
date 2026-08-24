@@ -167,8 +167,10 @@ test("supports a keyboard-only queue, dialog, and submit journey", async ({ page
   const addFeedback = page.locator("#selection-action");
   await addFeedback.focus();
   await page.keyboard.press("Enter");
+  const feedback = page.locator("#feedback");
+  await expect(feedback).toBeFocused();
   await page.keyboard.type("Keyboard review feedback");
-  await page.keyboard.press("Enter");
+  await feedback.press("Enter");
   await expect(page.locator(".annotation-badge")).toHaveText("1");
   const commentsToggle = page.locator("#comments-toggle");
   await commentsToggle.focus();
@@ -209,12 +211,12 @@ test("isolates the optional Codex widget-state compatibility adapter", async ({ 
   expect(await page.evaluate(() => "openai" in window)).toBe(true);
 });
 
-test("reflows at 400 percent and honors accessibility media", async ({ page }) => {
+test("reflows at 320 CSS pixels and honors accessibility media", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-display-mode", "fullscreen");
-  await page.setViewportSize({ width: 1280, height: 800 });
-  await page.evaluate(() => {
-    document.documentElement.style.zoom = "4";
-  });
+  // A 320 CSS-pixel viewport is the WCAG reflow equivalent of a 1280-pixel
+  // desktop viewport at 400% browser zoom. CSS `zoom` does not change media
+  // query evaluation and therefore cannot model browser zoom accurately.
+  await page.setViewportSize({ width: 320, height: 640 });
   await page.emulateMedia({ reducedMotion: "reduce", forcedColors: "active" });
   await expect(page.locator("#title")).toBeVisible();
   const horizontalOverflow = await page.evaluate(() =>
