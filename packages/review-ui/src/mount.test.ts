@@ -286,6 +286,38 @@ describe("mountMarkdownReview", () => {
     expect(document.querySelector("mark.review-highlight")).toBeNull();
   });
 
+  test("flush waits for queued state persistence before teardown", async () => {
+    installShell();
+    let finishSave: (() => void) | undefined;
+    const pendingSave = new Promise<void>((resolve) => {
+      finishSave = resolve;
+    });
+    const harness = createHarness({ save: () => pendingSave });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+
+    selectText();
+    document.getElementById("selection-action")?.click();
+    const field = document.getElementById("feedback") as HTMLTextAreaElement;
+    field.value = "Persist this before teardown";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    let flushed = false;
+    const flush = handle.flush().then(() => {
+      flushed = true;
+    });
+    await new Promise<void>((resolve) => {
+      queueMicrotask(resolve);
+    });
+    expect(flushed).toBe(false);
+    finishSave?.();
+    await flush;
+    expect(flushed).toBe(true);
+    expect(harness.saves.at(-1)?.queue[0]?.feedback).toBe("Persist this before teardown");
+    handle.destroy();
+  });
+
   test("retains failed submissions and reuses their stable retry ID", async () => {
     installShell();
     let attempts = 0;
@@ -839,10 +871,115 @@ describe("mountMarkdownReview", () => {
       expect(loads).toBe(1);
       expect(decodes).toBe(1);
       expect(
-        [...document.querySelectorAll("canvas")].map((canvas) => canvas.getAttribute("aria-label")),
-      ).toEqual(["First", "Second"]);
+        [...document.querySelectorAll("button.image-review-target")].map((target) =>
+          target.getAttribute("aria-label"),
+        ),
+      ).toEqual(["Add feedback for image: First", "Add feedback for image: Second"]);
+      expect(
+        [...document.querySelectorAll("canvas")].every(
+          (canvas) => canvas.getAttribute("aria-hidden") === "true",
+        ),
+      ).toBe(true);
     } finally {
       handle.destroy();
+      restoreCanvas();
+    }
+  });
+
+  test("queues an image comment and restores its visible target state", async () => {
+    installShell();
+    const restoreCanvas = installCanvasContext();
+    const bytes = Uint8Array.from([1, 2, 3]);
+    const imageRevision = await sha256Hex(bytes);
+    const imageDocument: ReviewDocument = {
+      ...reviewDocument,
+      html:
+        '<section class="review-block" data-start-line="1" data-end-line="1">' +
+        '<span class="local-image" data-local-image-id="local-image-1" data-alt="Architecture diagram"></span>' +
+        '<span class="local-image" data-local-image-id="local-image-1" data-alt="Architecture diagram"></span></section>',
+      images: [
+        {
+          id: "local-image-1",
+          mimeType: "image/png",
+          revision: imageRevision,
+          modifiedAt: NOW,
+          byteLength: bytes.length,
+          chunkCount: 1,
+          width: 1,
+          height: 1,
+        },
+      ],
+    };
+    const loadAssetChunk = (): Promise<PrivateReviewImageChunk> =>
+      Promise.resolve({
+        kind: "markdown-review-image-chunk",
+        reviewSessionId: SESSION,
+        revision: imageDocument.revision,
+        imageId: "local-image-1",
+        imageRevision,
+        mimeType: "image/png",
+        chunkIndex: 0,
+        chunkCount: 1,
+        byteOffset: 0,
+        byteLength: bytes.length,
+        data: Buffer.from(bytes).toString("base64"),
+      });
+    const imageDecoder = {
+      decode: () =>
+        Promise.resolve({
+          width: 1,
+          height: 1,
+          data: Uint8ClampedArray.from([1, 2, 3, 255]),
+        }),
+    };
+    const firstHarness = createHarness({ loadAssetChunk });
+    const firstHandle = mountMarkdownReview({
+      ports: firstHarness.ports,
+      initialDocument: imageDocument,
+      imageDecoder,
+    });
+    try {
+      await settle(6);
+      const targets = document.querySelectorAll<HTMLButtonElement>(".image-review-target");
+      const target = targets[1];
+      expect(target?.getAttribute("aria-label")).toBe(
+        "Add feedback for image: Architecture diagram",
+      );
+      target?.click();
+      expect(document.getElementById("review-composer")?.hidden).toBe(false);
+      expect(document.getElementById("quote")?.textContent).toBe("Image: Architecture diagram");
+      expect(target?.classList.contains("is-selected")).toBe(true);
+      const feedback = document.getElementById("feedback") as HTMLTextAreaElement;
+      feedback.value = "Increase the diagram labels.";
+      feedback.dispatchEvent(new Event("input", { bubbles: true }));
+      document.getElementById("add-queue")?.click();
+      await settle(4);
+      const saved = firstHarness.saves.at(-1);
+      expect(saved?.queue[0]?.imageId).toBe("local-image-1");
+      expect(saved?.queue[0]?.quote).toBe("Image: Architecture diagram");
+      expect(targets[0]?.classList.contains("has-comments")).toBe(false);
+      expect(target?.classList.contains("has-comments")).toBe(true);
+      if (!saved) throw new Error("Expected queued state to be saved");
+
+      firstHandle.destroy();
+      installShell();
+      const restoredHarness = createHarness({ initialState: saved, loadAssetChunk });
+      const restoredHandle = mountMarkdownReview({
+        ports: restoredHarness.ports,
+        initialDocument: imageDocument,
+        imageDecoder,
+      });
+      try {
+        await settle(6);
+        const restoredTargets = document.querySelectorAll(".image-review-target");
+        expect(restoredTargets[0]?.classList.contains("has-comments")).toBe(false);
+        expect(restoredTargets[1]?.classList.contains("has-comments")).toBe(true);
+        expect(document.querySelectorAll(".annotation-badge")).toHaveLength(1);
+      } finally {
+        restoredHandle.destroy();
+      }
+    } finally {
+      firstHandle.destroy();
       restoreCanvas();
     }
   });

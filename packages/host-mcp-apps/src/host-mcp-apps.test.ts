@@ -7,7 +7,11 @@ import {
   parsePrivateImageChunkToolResult,
   parseReviewDocumentToolResult,
 } from "./payloads";
-import { createReviewStateStore } from "./state-store";
+import {
+  MAX_REVIEW_STATE_STORAGE_BYTES,
+  REVIEW_STATE_STORAGE_PREFIX,
+  createReviewStateStore,
+} from "./state-store";
 
 const reviewDocument = {
   kind: "markdown-review-document" as const,
@@ -49,6 +53,34 @@ const chunkSummary = {
 };
 
 const privateChunk = { ...chunkSummary, data: "YWJj" };
+
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear() {
+      values.clear();
+    },
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    key(index) {
+      return [...values.keys()][index] ?? null;
+    },
+    removeItem(key) {
+      values.delete(key);
+    },
+    setItem(key, value) {
+      values.set(key, value);
+    },
+  };
+}
+
+function withStorage(storage: Storage, extra: Readonly<Record<string, unknown>> = {}): Window {
+  return { ...extra, localStorage: storage } as unknown as Window;
+}
 
 function parseFencedEnvelope(message: string): {
   readonly fence: string;
@@ -280,7 +312,38 @@ describe("host payload validation", () => {
 });
 
 describe("review state store", () => {
-  test("uses validated in-memory state", async () => {
+  test("restores validated state across component remounts for the same review session", async () => {
+    const state = PersistedReviewStateSchema.parse({
+      path: reviewDocument.path,
+      theme: "dark",
+      queue: [
+        {
+          id: "feedback-1",
+          serial: 1,
+          path: reviewDocument.path,
+          revision: reviewDocument.revision,
+          startLine: 1,
+          endLine: 2,
+          anchorX: 0.5,
+          anchorY: 0.5,
+          quote: "Review",
+          feedback: "Persist this queued comment.",
+          createdAt: "2026-08-24T00:00:00.000Z",
+        },
+      ],
+      nextSerial: 2,
+      lastSubmission: null,
+    });
+    const storage = createMemoryStorage();
+    const firstStore = createReviewStateStore(withStorage(storage));
+    expect(await firstStore.load(reviewDocument)).toBeNull();
+    await firstStore.save(state);
+
+    const remountedStore = createReviewStateStore(withStorage(storage));
+    expect(await remountedStore.load(reviewDocument)).toEqual(state);
+  });
+
+  test("isolates persisted queues by stable review session", async () => {
     const state = PersistedReviewStateSchema.parse({
       path: reviewDocument.path,
       theme: "dark",
@@ -288,14 +351,55 @@ describe("review state store", () => {
       nextSerial: 1,
       lastSubmission: null,
     });
-    const store = createReviewStateStore();
-    await store.save(state);
+    const storage = createMemoryStorage();
+    const firstStore = createReviewStateStore(withStorage(storage));
+    await firstStore.load(reviewDocument);
+    await firstStore.save(state);
+
+    const otherStore = createReviewStateStore(withStorage(storage));
+    expect(
+      await otherStore.load({
+        ...reviewDocument,
+        reviewSessionId: "223e4567-e89b-42d3-a456-426614174000",
+      }),
+    ).toBeNull();
+  });
+
+  test("removes corrupt and oversized persisted records without blocking the review", async () => {
+    const storage = createMemoryStorage();
+    const key = `${REVIEW_STATE_STORAGE_PREFIX}${reviewDocument.reviewSessionId}`;
+    storage.setItem(key, "{not-json");
+    expect(await createReviewStateStore(withStorage(storage)).load(reviewDocument)).toBeNull();
+    expect(storage.getItem(key)).toBeNull();
+
+    storage.setItem(key, "x".repeat(MAX_REVIEW_STATE_STORAGE_BYTES + 1));
+    expect(await createReviewStateStore(withStorage(storage)).load(reviewDocument)).toBeNull();
+    expect(storage.getItem(key)).toBeNull();
+  });
+
+  test("keeps an in-memory fallback and reports unavailable browser storage", async () => {
+    const state = PersistedReviewStateSchema.parse({
+      path: reviewDocument.path,
+      theme: "light",
+      queue: [],
+      nextSerial: 1,
+      lastSubmission: null,
+    });
+    const store = createReviewStateStore({} as Window);
+    expect(await store.load(reviewDocument)).toBeNull();
+    let message = "";
+    try {
+      await store.save(state);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("Persistent browser storage is unavailable");
     expect(await store.load(reviewDocument)).toEqual(state);
   });
 
   test("does not read or publish legacy window.openai widget state", async () => {
     let setWidgetStateCalls = 0;
-    const fakeWindow = {
+    const fakeWindow = withStorage(createMemoryStorage(), {
       openai: {
         widgetState: {
           privateContent: { path: reviewDocument.path, theme: "dark", queue: [], nextSerial: 99 },
@@ -304,7 +408,7 @@ describe("review state store", () => {
           setWidgetStateCalls += 1;
         },
       },
-    } as unknown as Window;
+    });
     const store = createReviewStateStore(fakeWindow);
     expect(await store.load(reviewDocument)).toBeNull();
     const state = PersistedReviewStateSchema.parse({

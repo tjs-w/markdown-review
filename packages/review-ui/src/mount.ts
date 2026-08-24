@@ -254,6 +254,10 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     if (initialDocument) await this.openDocument(initialDocument);
   }
 
+  flush(): Promise<void> {
+    return this.#saveChain;
+  }
+
   destroy(): void {
     if (this.#destroyed) return;
     this.#destroyed = true;
@@ -414,8 +418,116 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     );
   }
 
+  #imageQuote(target: HTMLElement): string {
+    return `Image: ${target.dataset["alt"] || "Local Markdown image"}`.slice(0, 1400);
+  }
+
+  #imageAnchorPosition(
+    target: HTMLButtonElement,
+    block: HTMLElement,
+  ): Pick<ReviewSelection, "anchorX" | "anchorY"> {
+    const rect = target.getBoundingClientRect();
+    const blockRect = block.getBoundingClientRect();
+    if (blockRect.width > 0 && blockRect.height > 0 && (rect.width > 0 || rect.height > 0)) {
+      return {
+        anchorX: clamp((rect.left + rect.width / 2 - blockRect.left) / blockRect.width, 0.96),
+        anchorY: clamp((rect.top + rect.height / 2 - blockRect.top) / blockRect.height, 0.5),
+      };
+    }
+    const targets = [...block.querySelectorAll<HTMLButtonElement>("button.image-review-target")];
+    const index = Math.max(0, targets.indexOf(target));
+    return { anchorX: 0.5, anchorY: (index + 0.5) / Math.max(1, targets.length) };
+  }
+
+  #closestImageTarget(
+    candidates: readonly HTMLButtonElement[],
+    selection: ReviewSelection,
+  ): HTMLButtonElement | null {
+    const scored = candidates
+      .map((target) => {
+        const block = target.closest<HTMLElement>(".review-block");
+        if (!block) return null;
+        const position = this.#imageAnchorPosition(target, block);
+        return {
+          target,
+          distance: Math.hypot(
+            position.anchorX - selection.anchorX,
+            position.anchorY - selection.anchorY,
+          ),
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+      .sort((left, right) => left.distance - right.distance);
+    const first = scored[0];
+    const second = scored[1];
+    if (!first || (second && Math.abs(first.distance - second.distance) < 0.000_001)) return null;
+    return first.target;
+  }
+
+  #findImageTarget(
+    selection: ReviewSelection,
+    preferredBlock: HTMLElement | null = null,
+    stale = false,
+  ): HTMLButtonElement | null {
+    if (!selection.imageId) return null;
+    const candidates = [
+      ...this.#root.querySelectorAll<HTMLButtonElement>("button.image-review-target"),
+    ].filter((target) => target.dataset["localImageId"] === selection.imageId);
+    if (candidates.length === 0) return null;
+    const quoteMatches = candidates.filter(
+      (target) => !selection.quote || this.#imageQuote(target) === selection.quote,
+    );
+    const eligible = quoteMatches.length > 0 ? quoteMatches : candidates;
+    if (preferredBlock) {
+      const preferred = eligible.filter((target) => preferredBlock.contains(target));
+      if (preferred.length === 1) return preferred[0] ?? null;
+      if (!stale && preferred.length > 1) return this.#closestImageTarget(preferred, selection);
+    }
+    const lineMatches = eligible.filter((target) => {
+      const block = target.closest<HTMLElement>(".review-block");
+      const start = Number(block?.dataset["startLine"]);
+      const end = Number(block?.dataset["endLine"]);
+      return (
+        Number.isSafeInteger(start) &&
+        Number.isSafeInteger(end) &&
+        selection.startLine >= start &&
+        selection.startLine <= end
+      );
+    });
+    if (lineMatches.length === 1) return lineMatches[0] ?? null;
+    if (!stale && lineMatches.length > 1) return this.#closestImageTarget(lineMatches, selection);
+    if (stale && quoteMatches.length === 1) return quoteMatches[0] ?? null;
+    return eligible.length === 1 ? (eligible[0] ?? null) : null;
+  }
+
+  #syncImageTargetState(target: HTMLButtonElement): void {
+    target.classList.toggle(
+      "has-comments",
+      this.#round.persisted.queue.some(
+        (item) =>
+          item.path === this.#document?.path &&
+          this.#findImageTarget(
+            item,
+            target.closest<HTMLElement>(".review-block"),
+            this.#itemIsStale(item),
+          ) === target,
+      ),
+    );
+  }
+
+  #syncImageTargetStates(): void {
+    this.#root
+      .querySelectorAll<HTMLButtonElement>("button.image-review-target")
+      .forEach((target) => {
+        this.#syncImageTargetState(target);
+      });
+  }
+
   #findAnchorBlock(item: QueuedFeedback): HTMLElement | null {
     const blocks = [...this.#root.querySelectorAll<HTMLElement>(".review-block")];
+    const imageTarget = this.#findImageTarget(item, null, this.#itemIsStale(item));
+    const imageBlock = imageTarget?.closest<HTMLElement>(".review-block") ?? null;
+    if (imageBlock) return imageBlock;
     const resolved = findReviewHighlightBlock(this.#element("document"), {
       ...item,
       stale: this.#itemIsStale(item),
@@ -449,6 +561,9 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#root.querySelectorAll(".review-block.has-comments").forEach((element) => {
       element.classList.remove("has-comments");
     });
+    this.#root.querySelectorAll(".image-review-target.has-comments").forEach((element) => {
+      element.classList.remove("has-comments");
+    });
     const currentItems = this.#round.persisted.queue.filter(
       (item) => item.path === this.#document?.path,
     );
@@ -462,6 +577,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       if (item.path !== this.#document?.path) continue;
       const block = this.#findAnchorBlock(item);
       if (!block) continue;
+      this.#findImageTarget(item, block, this.#itemIsStale(item))?.classList.add("has-comments");
       block.classList.add("has-comments");
       const stackKey = Math.round(item.anchorY * 20);
       const blockStacks = stacks.get(block) ?? new Map<number, number>();
@@ -557,7 +673,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       const empty = this.#root.createElement("div");
       empty.className = "empty";
       empty.setAttribute("role", "listitem");
-      empty.textContent = "No comments yet. Select text in the document to add one.";
+      empty.textContent = "No comments yet. Select text or choose an image to add one.";
       list.appendChild(empty);
       return;
     }
@@ -593,8 +709,11 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       go.type = "button";
       go.className = "button";
       go.dataset["commentAction"] = "go";
-      go.textContent = "Go to passage";
-      go.setAttribute("aria-label", `Go to passage for comment ${item.serial}`);
+      go.textContent = item.imageId ? "Go to image" : "Go to passage";
+      go.setAttribute(
+        "aria-label",
+        `Go to ${item.imageId ? "image" : "passage"} for comment ${item.serial}`,
+      );
       actions.appendChild(go);
       if (!this.#element("review-composer").hidden) {
         const reference = this.#root.createElement("button");
@@ -769,6 +888,36 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     }
   }
 
+  #openImageComposer(target: HTMLButtonElement): void {
+    if (!this.#element("review-composer").hidden) {
+      this.#toast("Queue or close the open comment before selecting another image.");
+      return;
+    }
+    const block = target.closest<HTMLElement>(".review-block");
+    const imageId = target.dataset["localImageId"];
+    const startLine = Number(block?.dataset["startLine"]);
+    const endLine = Number(block?.dataset["endLine"]);
+    if (!block || !imageId || !Number.isSafeInteger(startLine) || !Number.isSafeInteger(endLine))
+      return;
+    const position = this.#imageAnchorPosition(target, block);
+    const selection: ActiveSelection = {
+      startLine,
+      endLine,
+      anchorX: position.anchorX,
+      anchorY: position.anchorY,
+      quote: this.#imageQuote(target),
+      imageId,
+      block,
+    };
+    this.#pendingSelection = null;
+    this.#element("selection-action").hidden = true;
+    this.#view.getSelection?.()?.removeAllRanges();
+    this.#lastSelectionAnnouncement = `${lineLabel(selection)}\n${selection.quote}`;
+    this.#element("selection-status").textContent =
+      `Image ready for feedback, ${lineLabel(selection)}. The comment editor is open.`;
+    this.#openComposer(selection, { invoker: target });
+  }
+
   #setComposerHelp(open: boolean, restoreFocus = false): void {
     const nextOpen = open && !this.#element("review-composer").hidden;
     this.#element("composer-help-popover").hidden = !nextOpen;
@@ -814,6 +963,9 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#root.querySelectorAll(".review-block.is-selected").forEach((element) => {
       element.classList.remove("is-selected");
     });
+    this.#root.querySelectorAll(".image-review-target.is-selected").forEach((element) => {
+      element.classList.remove("is-selected");
+    });
     selection.block.classList.add("is-selected");
     this.#selection = {
       startLine: selection.startLine,
@@ -822,8 +974,10 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       anchorY: clamp(selection.anchorY, 1),
       quote: selection.quote.slice(0, 1400),
       ...(selection.textAnchor ? { textAnchor: selection.textAnchor } : {}),
+      ...(selection.imageId ? { imageId: selection.imageId } : {}),
       block: selection.block,
     };
+    this.#findImageTarget(this.#selection, selection.block)?.classList.add("is-selected");
     this.#editingId = options.editingId ?? null;
     this.#returnFocus =
       options.invoker && options.invoker !== this.#element("selection-action")
@@ -863,6 +1017,9 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#selection = null;
     this.#returnFocus = null;
     this.#root.querySelectorAll(".review-block.is-selected").forEach((element) => {
+      element.classList.remove("is-selected");
+    });
+    this.#root.querySelectorAll(".image-review-target.is-selected").forEach((element) => {
       element.classList.remove("is-selected");
     });
     this.#updateComposerActions();
@@ -943,6 +1100,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       anchorY: selection.anchorY,
       quote: selection.quote,
       ...(selection.textAnchor ? { textAnchor: selection.textAnchor } : {}),
+      ...(selection.imageId ? { imageId: selection.imageId } : {}),
     };
   }
 
@@ -1227,10 +1385,16 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       if (!image) throw new Error("Image metadata is unavailable");
       const decoded = await this.#loadDecodedImage(reviewDocument, image, placeholder, generation);
       if (this.#destroyed || generation !== this.#generation) return;
+      const target = this.#root.createElement("button");
+      target.type = "button";
+      target.className = "image-review-target";
+      target.dataset["localImageId"] = image.id;
+      target.dataset["alt"] = alt;
+      target.setAttribute("aria-label", `Add feedback for image: ${alt}`);
+      target.title = `Add feedback for image: ${alt}`;
       const canvas = this.#root.createElement("canvas");
       canvas.className = "local-image-canvas";
-      canvas.setAttribute("role", "img");
-      canvas.setAttribute("aria-label", alt);
+      canvas.setAttribute("aria-hidden", "true");
       canvas.width = decoded.width;
       canvas.height = decoded.height;
       const context = canvas.getContext("2d");
@@ -1238,7 +1402,9 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       const pixels = context.createImageData(decoded.width, decoded.height);
       pixels.data.set(decoded.data);
       context.putImageData(pixels, 0, 0);
-      placeholder.replaceWith(canvas);
+      target.appendChild(canvas);
+      placeholder.replaceWith(target);
+      this.#syncImageTargetStates();
     } catch (error) {
       if (this.#destroyed) return;
       if (generation === this.#generation && !errorMessage(error).includes("superseded")) {
@@ -1451,6 +1617,12 @@ class MarkdownReviewController implements MarkdownReviewHandle {
         placeholder.dataset["loading"] = "";
         void this.#installLocalImages(this.#document, this.#generation);
       }
+      return;
+    }
+    const imageTarget = event.target.closest<HTMLButtonElement>("button.image-review-target");
+    if (imageTarget) {
+      event.preventDefault();
+      this.#openImageComposer(imageTarget);
       return;
     }
     const annotation = event.target.closest<HTMLElement>("[data-feedback-annotation]");

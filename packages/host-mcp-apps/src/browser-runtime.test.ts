@@ -53,6 +53,7 @@ describe("browser composition runtime", () => {
     };
     const opened: ReviewDocument[] = [];
     const shownErrors: { error: unknown; retry?: () => void }[] = [];
+    let flushed = 0;
     let destroyed = 0;
     let mountOptions: MountMarkdownReviewOptions | undefined;
     const handle: MarkdownReviewHandle = {
@@ -62,6 +63,10 @@ describe("browser composition runtime", () => {
       },
       showError(error, retry) {
         shownErrors.push({ error, ...(retry ? { retry } : {}) });
+      },
+      flush() {
+        flushed += 1;
+        return Promise.resolve();
       },
       destroy() {
         destroyed += 1;
@@ -95,13 +100,15 @@ describe("browser composition runtime", () => {
       );
       hostOptions?.onError?.(new Error("host failed"));
       expect(shownErrors.at(-1)?.error).toEqual(new Error("host failed"));
-      hostOptions?.onTeardown?.();
+      await hostOptions?.onTeardown?.();
+      expect(flushed).toBe(1);
       expect(destroyed).toBe(1);
       runtime.reconnect();
       expect(connectCount).toBe(3);
       hostWindow.dispatchEvent(new Event("pagehide"));
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      expect(destroyed).toBe(2);
+      expect(flushed).toBe(2);
+      expect(destroyed).toBe(1);
       expect(closeCount).toBe(1);
     } finally {
       console.error = originalConsoleError;

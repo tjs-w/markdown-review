@@ -89,7 +89,7 @@ async function createHarness({
   readonly capabilities?: McpUiHostCapabilities;
   readonly context?: McpUiHostContext;
   readonly onCallTool?: NonNullable<AppBridge["oncalltool"]>;
-  readonly onTeardown?: () => void;
+  readonly onTeardown?: () => void | Promise<void>;
 } = {}): Promise<AppBridgeHarness> {
   const [appTransport, bridgeTransport] = InMemoryTransport.createLinkedPair();
   const documents: ReviewDocument[] = [];
@@ -219,16 +219,33 @@ describe("official MCP Apps AppBridge conformance", () => {
     await closeHarness(harness);
   });
 
-  test("acknowledges host teardown and invokes the adapter teardown exactly once", async () => {
+  test("awaits the adapter flush before acknowledging host teardown", async () => {
     let teardownCount = 0;
+    let finishTeardown: (() => void) | undefined;
+    const pendingTeardown = new Promise<void>((resolve) => {
+      finishTeardown = resolve;
+    });
     const harness = await createHarness({
       onTeardown() {
         teardownCount += 1;
+        return pendingTeardown;
       },
     });
 
-    expect(await harness.bridge.teardownResource({})).toEqual({});
+    let acknowledged = false;
+    const teardown = harness.bridge.teardownResource({}).then((result) => {
+      acknowledged = true;
+      return result;
+    });
+    await new Promise<void>((resolve) => {
+      queueMicrotask(resolve);
+    });
     expect(teardownCount).toBe(1);
+    expect(acknowledged).toBe(false);
+    expect(harness.host.ports.presentation.capabilities.intrinsicHeight).toBe(true);
+    finishTeardown?.();
+    expect(await teardown).toEqual({});
+    expect(acknowledged).toBe(true);
     expect(harness.host.ports.presentation.capabilities.intrinsicHeight).toBe(false);
     expect(harness.errors).toEqual([]);
 

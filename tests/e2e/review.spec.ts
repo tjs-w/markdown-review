@@ -193,6 +193,39 @@ test("renders PNG, JPEG, and static WebP without network access and passes axe",
   expect(darkResults.violations).toEqual([]);
 });
 
+test("comments on images with pointer and keyboard and restores the target highlight", async ({
+  page,
+}) => {
+  const png = page.getByRole("button", { name: "Add feedback for image: PNG pixel" });
+  await expect(png).toBeVisible();
+  await png.click();
+  await expect(page.locator("#feedback")).toBeFocused();
+  await expect(page.locator("#quote")).toHaveText("Image: PNG pixel");
+  await expect(png).toHaveClass(/is-selected/);
+  await page.locator("#feedback").fill("Make this image easier to read.");
+  await page.locator("#feedback").press("Enter");
+  await expect(png).toHaveClass(/has-comments/);
+  await expect(page.locator(".annotation-badge")).toHaveCount(1);
+  expect(await reviewHighlightCount(page)).toBe(0);
+
+  await page.reload();
+  await expect(page.locator("#title")).toHaveText("Markdown Review Fixture");
+  const restoredPng = page.getByRole("button", {
+    name: "Add feedback for image: PNG pixel",
+  });
+  await expect(restoredPng).toHaveClass(/has-comments/);
+  await expect(page.locator(".annotation-badge")).toHaveCount(1);
+  await page.locator("#comments-toggle").click();
+  await expect(page.getByRole("button", { name: "Go to image for comment 1" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  const jpeg = page.getByRole("button", { name: "Add feedback for image: JPEG pixel" });
+  await jpeg.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#feedback")).toBeFocused();
+  await expect(page.locator("#quote")).toHaveText("Image: JPEG pixel");
+});
+
 test("does not queue feedback while an IME composition is active", async ({ page }) => {
   const paragraph = page.locator(".review-block p").first();
   await paragraph.evaluate((element) => {
@@ -282,6 +315,19 @@ test("ignores legacy Codex widget-state publication", async ({ page }) => {
         ).__markdownReviewHost?.setWidgetStateCalls ?? -1,
     ),
   ).toBe(0);
+});
+
+test("restores queued comments after the review component remounts", async ({ page }) => {
+  await queueFirstParagraph(page, "Keep this comment across task switching");
+  await page.reload();
+  await expect(page.locator("#title")).toHaveText("Markdown Review Fixture");
+  await expect(page.locator("html")).toHaveAttribute("data-surface", "review");
+  await expect(page.locator(".annotation-badge")).toHaveText("1");
+  expect(await reviewHighlightCount(page)).toBe(1);
+  await page.locator("#comments-toggle").click();
+  await expect(page.locator(".queued-card")).toContainText(
+    "Keep this comment across task switching",
+  );
 });
 
 test("opens a usable intrinsic-height review when fullscreen is unsupported", async ({ page }) => {

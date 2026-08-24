@@ -1,6 +1,6 @@
 # Markdown Review
 
-Markdown Review is a local-first MCP Apps interface for reviewing rendered Markdown without creating a second, editable copy of the document. Select a passage, queue line-anchored feedback, and submit the complete review to a coding agent in one batch. Codex App is the first shipped interactive host; the core contracts, state, and UI are intentionally host-neutral for future Claude, pi, terminal, and Tauri adapters.
+Markdown Review is a local-first MCP Apps interface for reviewing rendered Markdown without creating a second, editable copy of the document. Select a passage or choose an image, queue line-anchored feedback, and submit the complete review to a coding agent in one batch. Codex App is the first shipped interactive host; the core contracts, state, and UI are intentionally host-neutral for future Claude, pi, terminal, and Tauri adapters.
 
 > **Status:** early development. Codex App is the shipped interactive host; the reusable UI and MCP transport follow the MCP Apps standard so additional host adapters can be added without rewriting the review core.
 
@@ -8,6 +8,7 @@ Markdown Review is a local-first MCP Apps interface for reviewing rendered Markd
 
 - A fullscreen, GitHub-style Markdown preview in the side panel.
 - Normal text selection and copying, followed by a compact `+` action for feedback.
+- Focusable image review targets for pointer, touch, and keyboard comments.
 - Inline comment markers numbered `#1`, `#2`, and so on.
 - A review queue that submits all comments together to avoid conflicting edits.
 - References between queued comments using `#N`; write `\#N` or `` `#N` `` for literal text.
@@ -38,7 +39,7 @@ The MCP server is intentionally narrow:
 
 This separation is the reason the project includes MCP: the server connects a Codex tool invocation to a trusted interactive component. A static HTML file by itself cannot receive the selected source file, return structured review comments to the active task, or maintain this context boundary.
 
-The implementation is split into host-neutral TypeScript workspaces. `contracts` validates every boundary, `core` owns pure review state, `markdown-node` reads and renders local files, and `review-ui` mounts against narrow document, submission, presentation, and state ports. `host-mcp-apps` supplies a standards-based runtime whose default submission is structured JSON; the Codex browser composition explicitly adds the concise `$markdown-review` formatter. Review state stays inside the component instead of being published as model-visible legacy widget context. A future Tauri shell can reuse the contracts, core, and UI and supply Rust IPC ports; Tauri is not included today.
+The implementation is split into host-neutral TypeScript workspaces. `contracts` validates every boundary, `core` owns pure review state, `markdown-node` reads and renders local files, and `review-ui` mounts against narrow document, submission, presentation, and state ports. `host-mcp-apps` supplies a standards-based runtime whose default submission is structured JSON; the Codex browser composition explicitly adds the concise `$markdown-review` formatter. Review state is persisted locally under its opaque review-session ID so queued comments survive component remounts, while never being published as model-visible legacy widget context. A future Tauri shell can reuse the contracts, core, and UI and supply Rust IPC ports; Tauri is not included today.
 
 ## Host support
 
@@ -86,8 +87,8 @@ Open /absolute/path/to/document.md for Markdown review.
 
 In the review:
 
-1. Select text and copy it normally if needed.
-2. Use the selection's `+` action to open the compact inline composer.
+1. Select text and copy it normally if needed, or choose a rendered image.
+2. Use the selection's `+` action—or activate the image's **Comment** control—to open the compact inline composer.
 3. Press Enter to queue the comment; use Shift+Enter for a new line.
 4. Reference an earlier queued comment with `#1`, `#2`, and so on.
 5. Select **Submit** when the review round is complete.

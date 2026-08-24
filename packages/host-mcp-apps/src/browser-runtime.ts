@@ -27,6 +27,7 @@ export function startMarkdownReviewRuntime(
   const createHost = dependencies.createHost ?? createMcpAppsHost;
   const mount = dependencies.mount ?? mountMarkdownReview;
   const reviewRef: { current?: MarkdownReviewHandle } = {};
+  let reviewDestroyed = false;
   let reconnect: () => void = () => undefined;
   const imageDecoder = dependencies.imageDecoder ?? createBrowserImageDecoder(hostWindow);
 
@@ -42,8 +43,12 @@ export function startMarkdownReviewRuntime(
       console.error("Markdown Review host error", error);
       reviewRef.current?.showError(error, reconnect);
     },
-    onTeardown() {
-      reviewRef.current?.destroy();
+    async onTeardown() {
+      await reviewRef.current?.flush();
+      if (!reviewDestroyed) {
+        reviewDestroyed = true;
+        reviewRef.current?.destroy();
+      }
     },
   });
 
@@ -60,8 +65,17 @@ export function startMarkdownReviewRuntime(
   hostWindow.addEventListener(
     "pagehide",
     () => {
-      reviewRef.current?.destroy();
-      void host.close();
+      void Promise.resolve(reviewRef.current?.flush())
+        .catch(() => {
+          console.error("Could not flush Markdown Review state before pagehide");
+        })
+        .finally(() => {
+          if (!reviewDestroyed) {
+            reviewDestroyed = true;
+            reviewRef.current?.destroy();
+          }
+          void host.close();
+        });
     },
     { once: true },
   );

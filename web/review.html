@@ -503,11 +503,75 @@
         border: 0;
         background: var(--line);
       }
-      .markdown canvas.local-image-canvas {
+      .image-review-target {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: fit-content;
+        min-width: 24px;
+        min-height: 24px;
+        max-width: 100%;
+        margin: 0 0 16px;
+        padding: 0;
+        overflow: visible;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        line-height: 0;
+      }
+      .image-review-target::after {
+        position: absolute;
+        top: 0;
+        right: 0;
+        display: grid;
+        place-items: center;
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        border: 1px solid var(--control-line);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--paper) 92%, transparent);
+        color: var(--ink);
+        box-shadow: var(--shadow-small);
+        content: "+";
+        font-size: 18px;
+        font-weight: 650;
+        line-height: 1.2;
+        opacity: 0.84;
+        pointer-events: none;
+        transition:
+          opacity 120ms ease,
+          border-color 120ms ease;
+      }
+      .image-review-target:hover::after,
+      .image-review-target:focus-visible::after {
+        border-color: var(--accent);
+        opacity: 1;
+      }
+      .image-review-target:focus-visible,
+      .image-review-target.is-selected {
+        outline: 3px solid var(--accent);
+        outline-offset: 3px;
+      }
+      .image-review-target.has-comments {
+        background: var(--review-highlight-bg);
+        box-shadow: 0 0 0 3px var(--review-highlight-edge);
+      }
+      .image-review-target.has-comments::after {
+        border-color: var(--review-highlight-edge);
+        background: var(--review-highlight-bg);
+        color: var(--review-highlight-fg);
+        content: "✓";
+        font-size: 14px;
+      }
+      .image-review-target canvas.local-image-canvas {
         display: block;
         max-width: 100%;
         height: auto;
         border-radius: 6px;
+        pointer-events: none;
       }
       .markdown img {
         display: block;
@@ -1108,6 +1172,17 @@
           color: HighlightText;
           text-decoration-color: HighlightText;
         }
+        .image-review-target:focus-visible,
+        .image-review-target.is-selected,
+        .image-review-target.has-comments {
+          outline: 3px solid Highlight;
+          box-shadow: none;
+        }
+        .image-review-target::after {
+          border-color: ButtonText;
+          background: ButtonFace;
+          color: ButtonText;
+        }
         .annotation-badge {
           border-color: Canvas;
           outline: 2px solid ButtonText;
@@ -1170,7 +1245,7 @@
               </svg>
             </button>
             <span class="review-help-tooltip" id="review-help-tooltip" role="tooltip">
-              Select text to add a comment · <kbd>⌘/Ctrl + Shift + M</kbd>
+              Select text or choose an image to comment · <kbd>⌘/Ctrl + Shift + M</kbd>
             </span>
           </div>
           <button

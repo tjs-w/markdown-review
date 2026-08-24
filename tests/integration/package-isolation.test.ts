@@ -52,7 +52,7 @@ describe("isolated shipping package", () => {
     await client.connect(transport);
     try {
       expect((await client.listTools()).tools).toHaveLength(3);
-      const resource = await client.readResource({ uri: "ui://markdown-review/v19.html" });
+      const resource = await client.readResource({ uri: "ui://markdown-review/v21.html" });
       const content = resource.contents[0];
       expect(content && "text" in content ? content.text : "").toContain(">Submit<");
       expect(
@@ -91,7 +91,7 @@ describe("isolated shipping package", () => {
     });
     await client.connect(transport);
     try {
-      const resource = await client.readResource({ uri: "ui://markdown-review/v19.html" });
+      const resource = await client.readResource({ uri: "ui://markdown-review/v21.html" });
       const content = resource.contents[0];
       const html = content && "text" in content ? content.text : "";
       expect(html).toContain("<title>Markdown Review</title>");

@@ -1,5 +1,6 @@
 import {
   MAX_FEEDBACK_LENGTH,
+  MAX_IMAGE_ID_LENGTH,
   MAX_PATH_LENGTH,
   MAX_QUEUE_ID_LENGTH,
   MAX_QUEUE_ITEMS,
@@ -78,6 +79,10 @@ function candidateQueueItem(
 
   const possibleSerial = Number(item["serial"]);
   const textAnchor = ReviewTextAnchorSchema.safeParse(item["textAnchor"]);
+  const imageId =
+    typeof item["imageId"] === "string" && item["imageId"].length > 0
+      ? item["imageId"].slice(0, MAX_IMAGE_ID_LENGTH)
+      : null;
   const serial =
     Number.isSafeInteger(possibleSerial) &&
     possibleSerial > 0 &&
@@ -95,7 +100,7 @@ function candidateQueueItem(
     anchorX: Math.max(0, Math.min(1, finiteNumber(item["anchorX"], 0.96))),
     anchorY: Math.max(0, Math.min(1, finiteNumber(item["anchorY"], 1))),
     quote: typeof item["quote"] === "string" ? item["quote"].slice(0, MAX_QUOTE_LENGTH) : "",
-    ...(textAnchor.success ? { textAnchor: textAnchor.data } : {}),
+    ...(imageId ? { imageId } : textAnchor.success ? { textAnchor: textAnchor.data } : {}),
     feedback,
     createdAt:
       typeof item["createdAt"] === "string" && item["createdAt"].length > 0

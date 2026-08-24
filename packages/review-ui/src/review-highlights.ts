@@ -9,6 +9,7 @@ export interface ReviewHighlightAnchor {
   readonly endLine: number;
   readonly quote: string;
   readonly textAnchor?: ReviewTextAnchor | undefined;
+  readonly imageId?: string | undefined;
   readonly stale?: boolean | undefined;
 }
 
@@ -220,6 +221,7 @@ function intervalForAnchor(
   index: SourceIndex,
   anchor: ReviewHighlightAnchor,
 ): HighlightInterval | null {
+  if (anchor.imageId) return null;
   return (
     intervalFromTextAnchor(index, anchor) ??
     (anchor.textAnchor ? null : intervalFromLegacyQuote(index, anchor))

@@ -126,5 +126,6 @@ export interface MountMarkdownReviewOptions {
 export interface MarkdownReviewHandle {
   openDocument(document: ReviewDocument): Promise<void>;
   showError(error: unknown, retry?: () => void): void;
+  flush(): Promise<void>;
   destroy(): void;
 }

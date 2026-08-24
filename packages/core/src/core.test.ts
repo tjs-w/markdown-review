@@ -87,6 +87,24 @@ describe("persisted state migration", () => {
     expect(normalized.queue[1]?.textAnchor).toBeUndefined();
   });
 
+  test("preserves image anchors and removes conflicting legacy text anchors", () => {
+    const normalized = normalizePersistedReviewState(
+      {
+        path: document.path,
+        queue: [
+          {
+            ...queuedItem({ quote: "Image: Architecture diagram" }),
+            imageId: "local-image-1",
+            textAnchor: { version: 1, start: 4, end: 17, prefix: "pre", suffix: "post" },
+          },
+        ],
+      },
+      now,
+    );
+    expect(normalized.queue[0]?.imageId).toBe("local-image-1");
+    expect(normalized.queue[0]?.textAnchor).toBeUndefined();
+  });
+
   test("caps the queue, repairs serials, clamps anchors, and ignores legacy history", () => {
     const inputQueue = Array.from({ length: 25 }, (_, index) => ({
       id: `id-${index}`,
@@ -259,6 +277,25 @@ describe("pure queue and submission state", () => {
         },
       ],
     });
+  });
+
+  test("keeps image comments in the stable line-and-quote submission contract", () => {
+    const image = queuedItem({
+      quote: "Image: Architecture diagram",
+      imageId: "local-image-1",
+      feedback: "Increase the diagram labels.",
+    });
+    const batch = buildReviewBatch(document, [image]);
+    expect(batch.items).toEqual([
+      {
+        id: "#1",
+        refs: [],
+        lines: [2, 3],
+        quote: "Image: Architecture diagram",
+        comment: "Increase the diagram labels.",
+      },
+    ]);
+    expect(batch.items[0]).not.toHaveProperty("imageId");
   });
 
   test("retains one stable attempt after failure and clears submitted IDs on success", () => {

@@ -259,6 +259,27 @@ describe("portable review contracts", () => {
     ).toBe(false);
   });
 
+  test("accepts bounded image anchors and rejects ambiguous anchor types", () => {
+    const selection = {
+      startLine: 4,
+      endLine: 4,
+      anchorX: 0.8,
+      anchorY: 0.5,
+      quote: "Image: Architecture diagram",
+      imageId: "local-image-1",
+    } as const;
+    expect(ReviewSelectionSchema.safeParse(selection).success).toBe(true);
+    expect(
+      ReviewSelectionSchema.safeParse({
+        ...selection,
+        textAnchor: { version: 1, start: 2, end: 10, prefix: "a", suffix: "b" },
+      }).success,
+    ).toBe(false);
+    expect(
+      ReviewSelectionSchema.safeParse({ ...selection, imageId: "x".repeat(129) }).success,
+    ).toBe(false);
+  });
+
   test("rejects duplicate persisted queue IDs", () => {
     const item = {
       id: "duplicate",

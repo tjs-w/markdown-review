@@ -36,7 +36,7 @@ export interface McpAppsHostOptions {
   readonly transport?: Parameters<App["connect"]>[0];
   readonly onDocument: (document: ReviewDocument) => void | Promise<void>;
   readonly onError?: (error: Error) => void;
-  readonly onTeardown?: () => void;
+  readonly onTeardown?: () => void | Promise<void>;
   readonly submissionFormatter?: (submission: ReviewSubmission) => string;
 }
 
@@ -161,9 +161,9 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
   app.addEventListener("hostcontextchanged", () => {
     syncContext();
   });
-  app.onteardown = () => {
+  app.onteardown = async () => {
+    await options.onTeardown?.();
     connected = false;
-    options.onTeardown?.();
     return {};
   };
 

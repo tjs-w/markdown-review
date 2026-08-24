@@ -39445,6 +39445,7 @@ var MAX_IMAGE_PIXELS = 16e6;
 var MAX_PATH_LENGTH = 4096;
 var MAX_QUEUE_ID_LENGTH = 120;
 var MAX_REVISION_LENGTH = 128;
+var MAX_IMAGE_ID_LENGTH = 128;
 var MAX_QUOTE_LENGTH = 1400;
 var MAX_TEXT_ANCHOR_CONTEXT_LENGTH = 64;
 var MAX_FEEDBACK_LENGTH = 2400;
@@ -39488,7 +39489,7 @@ var ReviewDocumentSummarySchema = ReviewDocumentIdentitySchema.extend({
   blockCount: NonNegativeSafeIntegerSchema
 }).strict();
 var ReviewImageDescriptorSchema = external_exports.object({
-  id: external_exports.string().min(1).max(128),
+  id: external_exports.string().min(1).max(MAX_IMAGE_ID_LENGTH),
   mimeType: ReviewImageMimeTypeSchema,
   revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
   modifiedAt: TimestampSchema,
@@ -39540,14 +39541,14 @@ var ErrorReviewDocumentSchema = external_exports.object({
 var ReviewImageChunkRequestSchema = external_exports.object({
   reviewSessionId: external_exports.uuid(),
   revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
-  imageId: external_exports.string().min(1).max(128),
+  imageId: external_exports.string().min(1).max(MAX_IMAGE_ID_LENGTH),
   chunkIndex: NonNegativeSafeIntegerSchema
 }).strict();
 var ReviewImageChunkSummarySchema = external_exports.object({
   kind: external_exports.literal("markdown-review-image-chunk"),
   reviewSessionId: external_exports.uuid(),
   revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
-  imageId: external_exports.string().min(1).max(128),
+  imageId: external_exports.string().min(1).max(MAX_IMAGE_ID_LENGTH),
   imageRevision: external_exports.string().min(1).max(MAX_REVISION_LENGTH),
   mimeType: ReviewImageMimeTypeSchema,
   chunkIndex: NonNegativeSafeIntegerSchema,
@@ -39564,10 +39565,14 @@ var ReviewSelectionSchema = external_exports.object({
   anchorX: external_exports.number().min(0).max(1),
   anchorY: external_exports.number().min(0).max(1),
   quote: external_exports.string().max(MAX_QUOTE_LENGTH),
-  textAnchor: ReviewTextAnchorSchema.optional()
+  textAnchor: ReviewTextAnchorSchema.optional(),
+  imageId: external_exports.string().min(1).max(MAX_IMAGE_ID_LENGTH).optional()
 }).strict().refine((selection) => selection.endLine >= selection.startLine, {
   message: "endLine must be greater than or equal to startLine",
   path: ["endLine"]
+}).refine((selection) => !(selection.textAnchor && selection.imageId), {
+  message: "A review selection cannot contain both text and image anchors",
+  path: ["imageId"]
 });
 var QueuedFeedbackSchema = ReviewSelectionSchema.extend({
   id: external_exports.string().min(1).max(MAX_QUEUE_ID_LENGTH),
@@ -51209,7 +51214,7 @@ var EMPTY_COMPLETION_RESULT = {
 };
 
 // packages/mcp-server/src/server.ts
-var MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v19.html";
+var MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v21.html";
 var REVIEW_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
 var SERVER_INSTRUCTIONS = "Use open_markdown_review only to render an absolute .md or .markdown path. The Markdown file is canonical. Review comments have stable #N serials within one queued review round and may reference earlier queued comments by serial; treat #N as a reference only when the feedback payload explicitly lists it as one, because literal #N text is supported. The component submits the full queue as one batch, clears it after a successful submission, and restarts numbering at #1. Discuss question-only items without editing, apply explicit change requests with normal filesystem tools, then reopen the review after any edits.";
 function errorMessage(error51) {

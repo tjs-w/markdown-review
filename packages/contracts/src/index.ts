@@ -6,6 +6,7 @@ export const MAX_IMAGE_PIXELS = 16_000_000;
 export const MAX_PATH_LENGTH = 4096;
 export const MAX_QUEUE_ID_LENGTH = 120;
 export const MAX_REVISION_LENGTH = 128;
+export const MAX_IMAGE_ID_LENGTH = 128;
 export const MAX_QUOTE_LENGTH = 1400;
 export const MAX_TEXT_ANCHOR_CONTEXT_LENGTH = 64;
 export const MAX_FEEDBACK_LENGTH = 2400;
@@ -61,7 +62,7 @@ export const ReviewDocumentSummarySchema = ReviewDocumentIdentitySchema.extend({
 
 export const ReviewImageDescriptorSchema = z
   .object({
-    id: z.string().min(1).max(128),
+    id: z.string().min(1).max(MAX_IMAGE_ID_LENGTH),
     mimeType: ReviewImageMimeTypeSchema,
     revision: z.string().min(1).max(MAX_REVISION_LENGTH),
     modifiedAt: TimestampSchema,
@@ -124,7 +125,7 @@ export const ReviewImageChunkRequestSchema = z
   .object({
     reviewSessionId: z.uuid(),
     revision: z.string().min(1).max(MAX_REVISION_LENGTH),
-    imageId: z.string().min(1).max(128),
+    imageId: z.string().min(1).max(MAX_IMAGE_ID_LENGTH),
     chunkIndex: NonNegativeSafeIntegerSchema,
   })
   .strict();
@@ -134,7 +135,7 @@ export const ReviewImageChunkSummarySchema = z
     kind: z.literal("markdown-review-image-chunk"),
     reviewSessionId: z.uuid(),
     revision: z.string().min(1).max(MAX_REVISION_LENGTH),
-    imageId: z.string().min(1).max(128),
+    imageId: z.string().min(1).max(MAX_IMAGE_ID_LENGTH),
     imageRevision: z.string().min(1).max(MAX_REVISION_LENGTH),
     mimeType: ReviewImageMimeTypeSchema,
     chunkIndex: NonNegativeSafeIntegerSchema,
@@ -165,11 +166,16 @@ export const ReviewSelectionSchema = z
     anchorY: z.number().min(0).max(1),
     quote: z.string().max(MAX_QUOTE_LENGTH),
     textAnchor: ReviewTextAnchorSchema.optional(),
+    imageId: z.string().min(1).max(MAX_IMAGE_ID_LENGTH).optional(),
   })
   .strict()
   .refine((selection) => selection.endLine >= selection.startLine, {
     message: "endLine must be greater than or equal to startLine",
     path: ["endLine"],
+  })
+  .refine((selection) => !(selection.textAnchor && selection.imageId), {
+    message: "A review selection cannot contain both text and image anchors",
+    path: ["imageId"],
   });
 
 export const QueuedFeedbackSchema = ReviewSelectionSchema.extend({
