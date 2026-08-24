@@ -1,5 +1,6 @@
 import {
   IMAGE_CHUNK_BYTES,
+  MAX_CLIPBOARD_TEXT_LENGTH,
   MAX_INLINE_IMAGE_REFERENCES,
   MAX_INLINE_IMAGE_TOTAL_PIXELS,
   type PrivateReviewImageChunk,
@@ -44,6 +45,11 @@ const MAX_QUEUE_ITEMS = 20;
 
 interface ActiveSelection extends ReviewSelection {
   readonly block: HTMLElement;
+}
+
+interface ContextMenuSnapshot {
+  readonly selection: ActiveSelection | null;
+  readonly copyText: string | null;
 }
 
 interface ActiveLoad {
@@ -120,8 +126,11 @@ function makeId(): string {
   );
 }
 
-function lineLabel(selection: Pick<ReviewSelection, "startLine" | "endLine"> | null): string {
+function lineLabel(
+  selection: Pick<ReviewSelection, "startLine" | "endLine" | "scope"> | null,
+): string {
   if (!selection) return "No selection";
+  if (selection.scope === "document") return "Whole document";
   return selection.startLine === selection.endLine
     ? `Line ${selection.startLine}`
     : `Lines ${selection.startLine}–${selection.endLine}`;
@@ -261,10 +270,17 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   readonly #view: Window & typeof globalThis;
   readonly #ports: MountMarkdownReviewOptions["ports"];
   readonly #imageDecoder: MountMarkdownReviewOptions["imageDecoder"];
+  readonly #allowNativeDevTools: boolean;
   #document: ReviewDocument | null = null;
   #lastGoodDocument: ReviewDocument | null = null;
   #round: ReviewRoundState;
   #pendingSelection: ActiveSelection | null = null;
+  #selectionCopyText: string | null = null;
+  #secondarySelection: ContextMenuSnapshot | null = null;
+  #contextSelection: ActiveSelection | null = null;
+  #contextCopyText: string | null = null;
+  #contextImageTarget: HTMLButtonElement | null = null;
+  #contextMenuReturnFocus: HTMLElement | null = null;
   #selection: ActiveSelection | null = null;
   #editingId: string | null = null;
   #generation = 0;
@@ -288,6 +304,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#view = this.#root.defaultView ?? window;
     this.#ports = options.ports;
     this.#imageDecoder = options.imageDecoder;
+    this.#allowNativeDevTools = options.allowNativeDevTools === true;
     this.#round = createReviewRoundState(
       normalizePersistedReviewState(null, new Date().toISOString()),
     );
@@ -319,6 +336,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#decodedImages.clear();
     this.#unsubscribePresentation();
     clearReviewHighlights(this.#element("document"));
+    this.#closeContextMenu(false);
     if (this.#toastTimer !== undefined) clearTimeout(this.#toastTimer);
   }
 
@@ -577,6 +595,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   }
 
   #findAnchorBlock(item: QueuedFeedback): HTMLElement | null {
+    if (item.scope === "document") return this.#element("document");
     const blocks = [...this.#root.querySelectorAll<HTMLElement>(".review-block")];
     const imageTarget = this.#findImageTarget(item, null, this.#itemIsStale(item));
     const imageBlock = imageTarget?.closest<HTMLElement>(".review-block") ?? null;
@@ -605,6 +624,63 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     );
   }
 
+  #createQueuedGroup(items: readonly QueuedFeedback[]): HTMLElement {
+    const first = items[0];
+    if (!first) throw new Error("A queued feedback group requires at least one item");
+    const group = this.#root.createElement("section");
+    group.className = "queued-group";
+    group.classList.toggle("document-feedback-group", first.scope === "document");
+    group.dataset["reviewUi"] = "queue-group";
+    group.setAttribute("aria-label", `Queued feedback for ${lineLabel(first)}`);
+    for (const item of items) {
+      const card = this.#root.createElement("article");
+      card.className = "queued-card";
+      card.dataset["feedbackId"] = item.id;
+      const labelId = `queued-comment-label-${item.serial}`;
+      card.setAttribute("aria-labelledby", labelId);
+
+      const head = this.#root.createElement("div");
+      head.className = "card-head";
+      const label = this.#root.createElement("span");
+      label.className = "card-label";
+      label.id = labelId;
+      label.textContent = `Comment ${item.serial} · ${lineLabel(item)}`;
+      head.appendChild(label);
+      if (this.#itemIsStale(item)) {
+        const stale = this.#root.createElement("span");
+        stale.className = "status-chip warning";
+        stale.textContent = "Source changed";
+        head.appendChild(stale);
+      }
+
+      const quote = this.#root.createElement("div");
+      quote.className = "card-quote";
+      quote.textContent = item.quote || "Markdown passage";
+      const feedback = this.#root.createElement("div");
+      feedback.className = "card-feedback";
+      feedback.textContent = parseCommentFeedback(item.feedback).text;
+      const actions = this.#root.createElement("div");
+      actions.className = "card-actions";
+      for (const [actionName, text, className] of [
+        ["edit", "Edit", "button"],
+        ["remove", "Remove", "button danger"],
+      ] as const) {
+        const button = this.#root.createElement("button");
+        button.type = "button";
+        button.className = className;
+        button.dataset["queueAction"] = actionName;
+        button.textContent = text;
+        button.disabled = this.#sendingIds.size > 0;
+        button.setAttribute("aria-label", `${text} for comment ${item.serial}, ${lineLabel(item)}`);
+        actions.appendChild(button);
+      }
+      if (item.scope === "document") card.append(head, feedback, actions);
+      else card.append(head, quote, feedback, actions);
+      group.appendChild(card);
+    }
+    return group;
+  }
+
   #renderQueueCards(): void {
     this.#root
       .querySelectorAll("[data-review-ui='queue-group'], [data-review-ui='annotation']")
@@ -625,9 +701,14 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       currentItems.map((item) => ({ ...item, stale: this.#itemIsStale(item) })),
     );
     const groups = new Map<HTMLElement, QueuedFeedback[]>();
+    const documentItems: QueuedFeedback[] = [];
     const stacks = new Map<HTMLElement, Map<number, number>>();
     for (const item of this.#round.persisted.queue) {
       if (item.path !== this.#document?.path) continue;
+      if (item.scope === "document") {
+        documentItems.push(item);
+        continue;
+      }
       const block = this.#findAnchorBlock(item);
       if (!block) continue;
       this.#findImageTarget(item, block, this.#itemIsStale(item))?.classList.add("has-comments");
@@ -658,62 +739,11 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       groups.set(block, groupItems);
     }
 
+    if (documentItems.length > 0) {
+      this.#element("document").prepend(this.#createQueuedGroup(documentItems));
+    }
     for (const [block, items] of groups) {
-      const first = items[0];
-      if (!first) continue;
-      const group = this.#root.createElement("section");
-      group.className = "queued-group";
-      group.dataset["reviewUi"] = "queue-group";
-      group.setAttribute("aria-label", `Queued feedback for ${lineLabel(first)}`);
-      for (const item of items) {
-        const card = this.#root.createElement("article");
-        card.className = "queued-card";
-        card.dataset["feedbackId"] = item.id;
-        const labelId = `queued-comment-label-${item.serial}`;
-        card.setAttribute("aria-labelledby", labelId);
-
-        const head = this.#root.createElement("div");
-        head.className = "card-head";
-        const label = this.#root.createElement("span");
-        label.className = "card-label";
-        label.id = labelId;
-        label.textContent = `Comment ${item.serial} · ${lineLabel(item)}`;
-        head.appendChild(label);
-        if (this.#itemIsStale(item)) {
-          const stale = this.#root.createElement("span");
-          stale.className = "status-chip warning";
-          stale.textContent = "Source changed";
-          head.appendChild(stale);
-        }
-
-        const quote = this.#root.createElement("div");
-        quote.className = "card-quote";
-        quote.textContent = item.quote || "Markdown passage";
-        const feedback = this.#root.createElement("div");
-        feedback.className = "card-feedback";
-        feedback.textContent = parseCommentFeedback(item.feedback).text;
-        const actions = this.#root.createElement("div");
-        actions.className = "card-actions";
-        for (const [actionName, text, className] of [
-          ["edit", "Edit", "button"],
-          ["remove", "Remove", "button danger"],
-        ] as const) {
-          const button = this.#root.createElement("button");
-          button.type = "button";
-          button.className = className;
-          button.dataset["queueAction"] = actionName;
-          button.textContent = text;
-          button.disabled = this.#sendingIds.size > 0;
-          button.setAttribute(
-            "aria-label",
-            `${text} for comment ${item.serial}, ${lineLabel(item)}`,
-          );
-          actions.appendChild(button);
-        }
-        card.append(head, quote, feedback, actions);
-        group.appendChild(card);
-      }
-      block.insertAdjacentElement("afterend", group);
+      block.insertAdjacentElement("afterend", this.#createQueuedGroup(items));
     }
     this.#updateQueueUi();
   }
@@ -752,7 +782,10 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       }
       const quote = this.#root.createElement("div");
       quote.className = "comment-index-quote";
-      quote.textContent = `${lineLabel(item)} · ${item.quote || "Markdown passage"}`;
+      quote.textContent =
+        item.scope === "document"
+          ? "Whole document"
+          : `${lineLabel(item)} · ${item.quote || "Markdown passage"}`;
       const feedback = this.#root.createElement("div");
       feedback.className = "comment-index-feedback";
       feedback.textContent = parseCommentFeedback(item.feedback).text;
@@ -762,11 +795,10 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       go.type = "button";
       go.className = "button";
       go.dataset["commentAction"] = "go";
-      go.textContent = item.imageId ? "Go to image" : "Go to passage";
-      go.setAttribute(
-        "aria-label",
-        `Go to ${item.imageId ? "image" : "passage"} for comment ${item.serial}`,
-      );
+      const destination =
+        item.scope === "document" ? "document" : item.imageId ? "image" : "passage";
+      go.textContent = `Go to ${destination}`;
+      go.setAttribute("aria-label", `Go to ${destination} for comment ${item.serial}`);
       actions.appendChild(go);
       if (!this.#element("review-composer").hidden) {
         const reference = this.#root.createElement("button");
@@ -842,7 +874,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
 
   #focusReviewBlock(block: HTMLElement | null): void {
     if (!block) return;
-    block.setAttribute("tabindex", "-1");
+    if (!block.hasAttribute("tabindex")) block.setAttribute("tabindex", "-1");
     block.scrollIntoView?.({ block: "center", behavior: this.#scrollBehavior() });
     block.focus({ preventScroll: true });
   }
@@ -878,12 +910,14 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     const nativeSelection = this.#view.getSelection?.();
     if (!nativeSelection || nativeSelection.isCollapsed || nativeSelection.rangeCount === 0) {
       this.#pendingSelection = null;
+      this.#selectionCopyText = null;
       this.#element("selection-action").hidden = true;
       return;
     }
     const nativeQuote = nativeSelection.toString().trim();
     if (!nativeQuote) {
       this.#pendingSelection = null;
+      this.#selectionCopyText = null;
       this.#element("selection-action").hidden = true;
       return;
     }
@@ -896,20 +930,37 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       range.endContainer.nodeType === Node.ELEMENT_NODE
         ? range.endContainer
         : range.endContainer.parentElement;
-    if (!(startNode instanceof this.#view.Element) || !(endNode instanceof this.#view.Element))
+    if (!(startNode instanceof this.#view.Element) || !(endNode instanceof this.#view.Element)) {
+      this.#pendingSelection = null;
+      this.#selectionCopyText = null;
+      this.#element("selection-action").hidden = true;
       return;
-    const startBlock = startNode.closest<HTMLElement>(".review-block");
-    const endBlock = endNode.closest<HTMLElement>(".review-block") ?? startBlock;
+    }
+    const captured = captureReviewTextAnchor(this.#element("document"), range);
+    if (!captured) {
+      this.#pendingSelection = null;
+      this.#selectionCopyText = null;
+      this.#element("selection-action").hidden = true;
+      return;
+    }
+    const startBlock = captured.startBlock;
+    const endBlock = captured.endBlock;
     if (!startBlock || !endBlock || !this.#element("document").contains(startBlock)) {
       this.#pendingSelection = null;
+      this.#selectionCopyText = null;
       this.#element("selection-action").hidden = true;
       return;
     }
     const startLine = Number(startBlock.dataset["startLine"]);
     const endLine = Number(endBlock.dataset["endLine"]);
-    if (!Number.isSafeInteger(startLine) || !Number.isSafeInteger(endLine)) return;
-    const captured = captureReviewTextAnchor(this.#element("document"), range);
-    const quote = (captured?.quote ?? nativeQuote).slice(0, 1400);
+    if (!Number.isSafeInteger(startLine) || !Number.isSafeInteger(endLine)) {
+      this.#pendingSelection = null;
+      this.#selectionCopyText = null;
+      this.#element("selection-action").hidden = true;
+      return;
+    }
+    const quote = captured.quote.slice(0, 1400);
+    this.#selectionCopyText = captured.quote;
     const rect = range.getBoundingClientRect();
     const blockRect = endBlock.getBoundingClientRect();
     this.#pendingSelection = {
@@ -921,7 +972,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       ),
       anchorY: clamp((rect.bottom - blockRect.top) / Math.max(1, blockRect.height), 1),
       quote,
-      ...(captured && captured.quote.length <= 1400 ? { textAnchor: captured.textAnchor } : {}),
+      ...(captured.quote.length <= 1400 ? { textAnchor: captured.textAnchor } : {}),
       block: endBlock,
     };
     const button = this.#element<HTMLButtonElement>("selection-action");
@@ -939,6 +990,182 @@ class MarkdownReviewController implements MarkdownReviewHandle {
         `Selection ready for feedback, ${lineLabel(this.#pendingSelection)}. ` +
         "Activate Add feedback or press Control or Command plus Shift plus M.";
     }
+  }
+
+  #documentSelection(): ActiveSelection | null {
+    if (!this.#document) return null;
+    return {
+      startLine: 1,
+      endLine: Math.max(1, this.#document.lineCount),
+      anchorX: 0.5,
+      anchorY: 0,
+      quote: `Whole document: ${this.#document.filename}`.slice(0, 1400),
+      scope: "document",
+      block: this.#element("document"),
+    };
+  }
+
+  #contextMenuItems(): HTMLButtonElement[] {
+    return [
+      ...this.#element("review-context-menu").querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]',
+      ),
+    ].filter((item) => !item.hidden && !item.disabled);
+  }
+
+  #closeContextMenu(restoreFocus = true): void {
+    const menu = this.#root.getElementById("review-context-menu");
+    if (!(menu instanceof this.#view.HTMLElement) || menu.hidden) return;
+    menu.hidden = true;
+    this.#element("review-actions").setAttribute("aria-expanded", "false");
+    this.#contextSelection = null;
+    this.#contextCopyText = null;
+    this.#contextImageTarget = null;
+    const returnFocus = this.#contextMenuReturnFocus;
+    this.#contextMenuReturnFocus = null;
+    if (restoreFocus && returnFocus?.isConnected && !returnFocus.hidden) {
+      returnFocus.focus({ preventScroll: true });
+    }
+  }
+
+  #showContextMenu(options: {
+    readonly x: number;
+    readonly y: number;
+    readonly selection?: ActiveSelection | null;
+    readonly copyText?: string | null;
+    readonly imageTarget?: HTMLButtonElement | null;
+    readonly invoker?: HTMLElement | null;
+  }): void {
+    const menu = this.#element("review-context-menu");
+    this.#closeContextMenu(false);
+    this.#contextSelection = options.selection ?? null;
+    this.#contextCopyText = options.copyText ?? null;
+    this.#contextImageTarget = options.imageTarget ?? null;
+    this.#contextMenuReturnFocus =
+      options.invoker ??
+      (this.#root.activeElement instanceof this.#view.HTMLElement
+        ? this.#root.activeElement
+        : null);
+    if (
+      this.#contextMenuReturnFocus &&
+      !this.#contextMenuReturnFocus.hasAttribute("tabindex") &&
+      this.#contextMenuReturnFocus.tabIndex < 0
+    ) {
+      this.#contextMenuReturnFocus.setAttribute("tabindex", "-1");
+    }
+
+    const composerOpen = !this.#element("review-composer").hidden;
+    const selectionItem = this.#element<HTMLButtonElement>("context-comment-selection");
+    const copyItem = this.#element<HTMLButtonElement>("context-copy-selection");
+    const imageItem = this.#element<HTMLButtonElement>("context-comment-image");
+    const separator = this.#element("context-selection-separator");
+    selectionItem.hidden = !this.#contextSelection;
+    copyItem.hidden = !this.#contextCopyText;
+    imageItem.hidden = !this.#contextImageTarget;
+    separator.hidden = !this.#contextSelection && !this.#contextImageTarget;
+    selectionItem.disabled = composerOpen;
+    imageItem.disabled = composerOpen;
+    this.#element<HTMLButtonElement>("context-comment-document").disabled =
+      composerOpen || !this.#document;
+
+    for (const item of menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')) {
+      item.tabIndex = -1;
+    }
+    menu.hidden = false;
+    this.#element("review-actions").setAttribute("aria-expanded", "true");
+    const rect = menu.getBoundingClientRect();
+    const viewportGutter = 8;
+    const maximumLeft = Math.max(
+      viewportGutter,
+      this.#view.innerWidth - rect.width - viewportGutter,
+    );
+    const maximumTop = Math.max(
+      viewportGutter,
+      this.#view.innerHeight - rect.height - viewportGutter,
+    );
+    const preferredTop =
+      options.y + rect.height + viewportGutter > this.#view.innerHeight
+        ? options.y - rect.height
+        : options.y;
+    menu.style.left = `${Math.max(viewportGutter, Math.min(maximumLeft, options.x))}px`;
+    menu.style.top = `${Math.max(viewportGutter, Math.min(maximumTop, preferredTop))}px`;
+    const first = this.#contextMenuItems()[0];
+    if (first) {
+      first.tabIndex = 0;
+      first.focus({ preventScroll: true });
+    } else {
+      this.#closeContextMenu();
+      this.#toast("Queue or close the open comment before starting another one.");
+    }
+  }
+
+  async #copyContextSelection(): Promise<void> {
+    const text = this.#contextCopyText;
+    this.#closeContextMenu();
+    if (!text) return;
+    if (new TextEncoder().encode(text).byteLength > MAX_CLIPBOARD_TEXT_LENGTH) {
+      this.#toast("The selected text is too large to copy from the review menu.");
+      return;
+    }
+    try {
+      if (!this.#ports.clipboard) throw new Error("Clipboard unavailable");
+      await this.#ports.clipboard.writeText(text);
+      this.#toast("Selected text copied.");
+    } catch {
+      this.#toast("Could not copy the selected text. Check clipboard permission and try again.");
+    }
+  }
+
+  #handleContextMenuAction(action: string): void {
+    if (action === "copy-selection") {
+      void this.#copyContextSelection();
+      return;
+    }
+    const selection = this.#contextSelection;
+    const imageTarget = this.#contextImageTarget;
+    const invoker = this.#contextMenuReturnFocus;
+    this.#closeContextMenu(false);
+    if (action === "comment-selection" && selection) {
+      this.#openComposer(selection, { invoker });
+    } else if (action === "comment-image" && imageTarget) {
+      this.#openImageComposer(imageTarget);
+    } else if (action === "comment-document") {
+      this.#openComposer(this.#documentSelection(), {
+        invoker,
+      });
+    }
+  }
+
+  #handleContextMenuKeydown(event: KeyboardEvent): boolean {
+    const menu = this.#element("review-context-menu");
+    if (menu.hidden || !(event.target instanceof this.#view.HTMLElement)) return false;
+    const items = this.#contextMenuItems();
+    const current = items.indexOf(event.target as HTMLButtonElement);
+    let next = -1;
+    if (event.key === "ArrowDown") next = current < 0 ? 0 : (current + 1) % items.length;
+    else if (event.key === "ArrowUp")
+      next = current < 0 ? items.length - 1 : (current - 1 + items.length) % items.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = items.length - 1;
+    else if (event.key === "Escape" || event.key === "Tab") {
+      event.preventDefault();
+      this.#closeContextMenu();
+      return true;
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      event.target.click();
+      return true;
+    } else {
+      return false;
+    }
+    event.preventDefault();
+    for (const item of items) item.tabIndex = -1;
+    const target = items[next];
+    if (target) {
+      target.tabIndex = 0;
+      target.focus({ preventScroll: true });
+    }
+    return true;
   }
 
   #openImageComposer(target: HTMLButtonElement): void {
@@ -963,6 +1190,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       block,
     };
     this.#pendingSelection = null;
+    this.#selectionCopyText = null;
     this.#element("selection-action").hidden = true;
     this.#view.getSelection?.()?.removeAllRanges();
     this.#lastSelectionAnnouncement = `${lineLabel(selection)}\n${selection.quote}`;
@@ -1013,13 +1241,14 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     } = {},
   ): void {
     if (!selection?.block) return;
+    this.#closeContextMenu(false);
     this.#root.querySelectorAll(".review-block.is-selected").forEach((element) => {
       element.classList.remove("is-selected");
     });
     this.#root.querySelectorAll(".image-review-target.is-selected").forEach((element) => {
       element.classList.remove("is-selected");
     });
-    selection.block.classList.add("is-selected");
+    if (selection.scope !== "document") selection.block.classList.add("is-selected");
     this.#selection = {
       startLine: selection.startLine,
       endLine: selection.endLine,
@@ -1028,6 +1257,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       quote: selection.quote.slice(0, 1400),
       ...(selection.textAnchor ? { textAnchor: selection.textAnchor } : {}),
       ...(selection.imageId ? { imageId: selection.imageId } : {}),
+      ...(selection.scope ? { scope: selection.scope } : {}),
       block: selection.block,
     };
     this.#findImageTarget(this.#selection, selection.block)?.classList.add("is-selected");
@@ -1040,14 +1270,20 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       ? "Edit queued feedback"
       : "Add feedback";
     this.#element("line-pill").textContent = lineLabel(this.#selection);
-    this.#element("quote").textContent = this.#selection.quote || "Markdown passage";
+    const quote = this.#element("quote");
+    quote.hidden = this.#selection.scope === "document";
+    quote.textContent = this.#selection.quote || "Markdown passage";
     this.#element<HTMLTextAreaElement>("feedback").value = options.feedback ?? "";
     this.#element("add-queue-label").textContent = this.#editingId ? "Save" : "Queue";
     this.#element("add-queue").setAttribute(
       "aria-label",
       this.#editingId ? "Save feedback" : "Queue feedback",
     );
-    selection.block.insertAdjacentElement("afterend", this.#element("review-composer"));
+    if (selection.scope === "document") {
+      selection.block.prepend(this.#element("review-composer"));
+    } else {
+      selection.block.insertAdjacentElement("afterend", this.#element("review-composer"));
+    }
     this.#element("review-composer").hidden = false;
     this.#setComposerHelp(false);
     this.#element("selection-action").hidden = true;
@@ -1065,6 +1301,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     const returnBlock = this.#selection?.block ?? null;
     this.#setComposerHelp(false);
     this.#element("review-composer").hidden = true;
+    this.#element("quote").hidden = false;
     this.#element<HTMLTextAreaElement>("feedback").value = "";
     this.#editingId = null;
     this.#selection = null;
@@ -1154,6 +1391,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       quote: selection.quote,
       ...(selection.textAnchor ? { textAnchor: selection.textAnchor } : {}),
       ...(selection.imageId ? { imageId: selection.imageId } : {}),
+      ...(selection.scope ? { scope: selection.scope } : {}),
     };
   }
 
@@ -1636,6 +1874,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#setMeta(
       `${reviewDocument.filename} · ${reviewDocument.lineCount} lines · rev ${reviewDocument.revision}`,
     );
+    this.#closeContextMenu(false);
     this.#closeComposer(false, false);
     const surface = this.#element("document");
     clearReviewHighlights(surface);
@@ -1792,10 +2031,19 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#view.addEventListener(
       "scroll",
       () => {
+        this.#closeContextMenu(false);
         this.#pendingSelection = null;
+        this.#selectionCopyText = null;
         this.#element("selection-action").hidden = true;
       },
       { capture: true, passive: true, signal },
+    );
+    this.#view.addEventListener(
+      "resize",
+      () => {
+        this.#closeContextMenu(false);
+      },
+      { passive: true, signal },
     );
     this.#root.addEventListener(
       "selectionchange",
@@ -1807,20 +2055,94 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#root.addEventListener(
       "pointerdown",
       (event) => {
-        if (this.#element("composer-help-popover").hidden) return;
         if (!(event.target instanceof this.#view.Node)) return;
+        const menu = this.#element("review-context-menu");
         if (
-          this.#element("composer-help-popover").contains(event.target) ||
-          this.#element("composer-help-toggle").contains(event.target)
-        )
-          return;
-        this.#setComposerHelp(false);
+          !menu.contains(event.target) &&
+          !this.#element("review-actions").contains(event.target)
+        ) {
+          this.#closeContextMenu(false);
+        }
+        if (event.button === 2) {
+          this.#captureSelection();
+          this.#secondarySelection = {
+            selection: this.#pendingSelection,
+            copyText: this.#selectionCopyText,
+          };
+        }
+        if (!this.#element("composer-help-popover").hidden) {
+          if (
+            this.#element("composer-help-popover").contains(event.target) ||
+            this.#element("composer-help-toggle").contains(event.target)
+          )
+            return;
+          this.#setComposerHelp(false);
+        }
       },
       { signal },
     );
     this.#root.addEventListener(
+      "contextmenu",
+      (event) => {
+        if (!(event instanceof this.#view.MouseEvent)) return;
+        if (this.#allowNativeDevTools && event.shiftKey) {
+          this.#secondarySelection = null;
+          this.#closeContextMenu(false);
+          return;
+        }
+        event.preventDefault();
+        const snapshot = this.#secondarySelection ?? {
+          selection: this.#pendingSelection,
+          copyText: this.#selectionCopyText,
+        };
+        this.#secondarySelection = null;
+        if (!(event.target instanceof this.#view.Element)) return;
+        const surface = this.#element("document");
+        if (!surface.contains(event.target) && event.target !== surface) {
+          this.#closeContextMenu(false);
+          return;
+        }
+        const imageTarget = event.target.closest<HTMLButtonElement>("button.image-review-target");
+        const invoker =
+          imageTarget ?? event.target.closest<HTMLElement>(".review-block") ?? surface;
+        this.#element("selection-action").hidden = true;
+        this.#showContextMenu({
+          x: event.clientX,
+          y: event.clientY,
+          selection: snapshot.selection,
+          copyText: snapshot.copyText,
+          imageTarget,
+          invoker,
+        });
+      },
+      { capture: true, signal },
+    );
+    this.#root.addEventListener(
       "keydown",
       (event) => {
+        if (this.#handleContextMenuKeydown(event)) return;
+        if (
+          (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) &&
+          event.target instanceof this.#view.Element
+        ) {
+          const surface = this.#element("document");
+          if (surface.contains(event.target) || event.target === surface) {
+            event.preventDefault();
+            const target =
+              event.target.closest<HTMLElement>("button.image-review-target, .review-block") ??
+              surface;
+            const rect = target.getBoundingClientRect();
+            this.#showContextMenu({
+              x: rect.left,
+              y: rect.bottom,
+              selection: this.#pendingSelection,
+              copyText: this.#selectionCopyText,
+              imageTarget: target.closest<HTMLButtonElement>("button.image-review-target"),
+              invoker: target,
+            });
+            return;
+          }
+        }
         if (event.key === "Escape" && !this.#element("composer-help-popover").hidden) {
           event.preventDefault();
           this.#setComposerHelp(false, true);
@@ -1848,6 +2170,33 @@ class MarkdownReviewController implements MarkdownReviewHandle {
         ) {
           event.preventDefault();
           event.target.closest<HTMLElement>(".markdown a[data-review-href]")?.click();
+        }
+      },
+      { signal },
+    );
+
+    this.#element("review-actions").addEventListener(
+      "click",
+      () => {
+        const button = this.#element<HTMLButtonElement>("review-actions");
+        const rect = button.getBoundingClientRect();
+        this.#showContextMenu({
+          x: rect.right - 240,
+          y: rect.bottom + 6,
+          selection: this.#pendingSelection,
+          copyText: this.#selectionCopyText,
+          invoker: button,
+        });
+      },
+      { signal },
+    );
+    this.#element("review-context-menu").addEventListener(
+      "click",
+      (event) => {
+        if (!(event.target instanceof this.#view.Element)) return;
+        const item = event.target.closest<HTMLButtonElement>("[data-context-action]");
+        if (item && !item.disabled) {
+          this.#handleContextMenuAction(item.dataset["contextAction"] ?? "");
         }
       },
       { signal },

@@ -3,6 +3,7 @@ export { mountMarkdownReview } from "./mount";
 export { ReviewPortError, shouldRetryPortError } from "./ports";
 export type {
   DisplayMode,
+  ClipboardPort,
   DecodedReviewImage,
   DocumentPort,
   DocumentRef,

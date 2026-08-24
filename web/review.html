@@ -21,9 +21,9 @@
         --warning: #9a6700;
         --warning-soft: #fff8c5;
         --success: #1a7f37;
-        --review-highlight-bg: #fff1a8;
+        --review-highlight-bg: rgba(9, 105, 218, 0.16);
         --review-highlight-fg: #1f2328;
-        --review-highlight-edge: #9a6700;
+        --review-highlight-edge: #0969da;
         --shadow: 0 8px 24px rgba(140, 149, 159, 0.2);
         --shadow-small: 0 3px 12px rgba(140, 149, 159, 0.16);
       }
@@ -43,9 +43,9 @@
         --warning: #d29922;
         --warning-soft: #3d2f12;
         --success: #89c99a;
-        --review-highlight-bg: #4b3f16;
-        --review-highlight-fg: #d8dce2;
-        --review-highlight-edge: #d29922;
+        --review-highlight-bg: rgba(145, 180, 242, 0.2);
+        --review-highlight-fg: #e6edf3;
+        --review-highlight-edge: #91b4f2;
         --shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
         --shadow-small: 0 3px 14px rgba(0, 0, 0, 0.26);
       }
@@ -618,15 +618,12 @@
       ::highlight(review-comments) {
         background: var(--review-highlight-bg);
         color: var(--review-highlight-fg);
-        text-decoration: underline 1px var(--review-highlight-edge);
-        text-underline-offset: 0.16em;
       }
       mark.review-highlight {
         padding: 0;
         background: var(--review-highlight-bg);
         color: var(--review-highlight-fg);
-        text-decoration: underline 1px var(--review-highlight-edge);
-        text-underline-offset: 0.16em;
+        border-radius: 2px;
       }
       .review-block.is-selected {
         background: color-mix(in srgb, var(--accent-soft) 38%, transparent);
@@ -659,6 +656,46 @@
       .selection-action:hover {
         background: var(--accent);
         color: var(--on-accent);
+      }
+      .review-context-menu {
+        position: fixed;
+        z-index: 90;
+        width: min(248px, calc(100vw - 16px));
+        padding: 5px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--paper);
+        box-shadow: var(--shadow);
+        color: var(--ink);
+      }
+      .review-context-item {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        min-height: 36px;
+        padding: 7px 10px;
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        font-size: 13px;
+        text-align: left;
+      }
+      .review-context-item:hover:not(:disabled),
+      .review-context-item:focus {
+        outline: 0;
+        background: var(--accent-soft);
+        color: var(--ink);
+      }
+      .review-context-item:disabled {
+        opacity: 0.48;
+        cursor: default;
+      }
+      .review-context-separator {
+        height: 1px;
+        margin: 5px 7px;
+        background: var(--line);
       }
       .annotation-badge {
         position: absolute;
@@ -855,6 +892,11 @@
       .queued-group {
         margin: 8px 0 20px;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      }
+      .document-feedback-group {
+        margin: 0 0 24px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid var(--line);
       }
       .queued-card {
         margin-top: 7px;
@@ -1100,6 +1142,9 @@
         .identity {
           display: none;
         }
+        .review-help {
+          display: none;
+        }
         .actions {
           width: 100%;
           justify-content: flex-end;
@@ -1121,6 +1166,7 @@
           justify-content: center;
         }
         #comments-toggle,
+        #review-actions,
         #send-all {
           width: 38px;
           height: 38px;
@@ -1135,6 +1181,9 @@
         .icon-button.compact {
           width: 40px;
           height: 40px;
+        }
+        .review-context-item {
+          min-height: 40px;
         }
       }
       @media (prefers-reduced-motion: reduce) {
@@ -1158,12 +1207,17 @@
         .queued-card,
         .comment-index-item,
         .comments-panel,
+        .review-context-menu,
         button,
         textarea {
           border-color: CanvasText;
         }
         .review-block.is-selected {
           outline: 2px solid Highlight;
+        }
+        .review-context-item:focus {
+          outline: 2px solid Highlight;
+          outline-offset: -2px;
         }
         ::highlight(review-comments) {
           background: Highlight;
@@ -1248,9 +1302,26 @@
               </svg>
             </button>
             <span class="review-help-tooltip" id="review-help-tooltip" role="tooltip">
-              Select text or choose an image to comment · <kbd>⌘/Ctrl + Shift + M</kbd>
+              Right-click or use Review actions · <kbd>⌘/Ctrl + Shift + M</kbd> comments on a
+              selection
             </span>
           </div>
+          <button
+            class="button with-icon"
+            id="review-actions"
+            type="button"
+            aria-label="Review actions"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            aria-controls="review-context-menu"
+          >
+            <svg class="ui-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M3 9.25a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5Zm5 0a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5Zm5 0a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5Z"
+              ></path>
+            </svg>
+            <span class="label">Review</span>
+          </button>
           <button
             class="button with-icon"
             id="comments-toggle"
@@ -1310,7 +1381,13 @@
       </header>
       <div class="review-layout">
         <main class="workspace">
-          <article class="paper markdown" id="document" aria-labelledby="title" aria-busy="false">
+          <article
+            class="paper markdown"
+            id="document"
+            aria-labelledby="title"
+            aria-busy="false"
+            tabindex="0"
+          >
             <div class="empty">Opening Markdown review…</div>
           </article>
         </main>
@@ -1357,9 +1434,56 @@
       </svg>
     </button>
 
+    <div
+      class="review-context-menu"
+      id="review-context-menu"
+      role="menu"
+      aria-label="Review actions"
+      hidden
+    >
+      <button
+        class="review-context-item"
+        id="context-copy-selection"
+        type="button"
+        role="menuitem"
+        data-context-action="copy-selection"
+      >
+        Copy selected text
+      </button>
+      <button
+        class="review-context-item"
+        id="context-comment-selection"
+        type="button"
+        role="menuitem"
+        data-context-action="comment-selection"
+      >
+        Comment on selection
+      </button>
+      <button
+        class="review-context-item"
+        id="context-comment-image"
+        type="button"
+        role="menuitem"
+        data-context-action="comment-image"
+      >
+        Comment on image
+      </button>
+      <div class="review-context-separator" id="context-selection-separator" role="separator"></div>
+      <button
+        class="review-context-item"
+        id="context-comment-document"
+        type="button"
+        role="menuitem"
+        data-context-action="comment-document"
+      >
+        Comment on whole document
+      </button>
+    </div>
+
     <section
       class="inline-composer"
       id="review-composer"
+      data-review-ui="composer"
       aria-labelledby="composer-title"
       aria-describedby="line-pill quote feedback-message"
       aria-busy="false"

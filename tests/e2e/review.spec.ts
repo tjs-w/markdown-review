@@ -138,6 +138,167 @@ test("preserves native selection, queues feedback, and submits one batch", async
   });
 });
 
+test("suppresses the host menu, copies source text, and queues whole-document feedback", async ({
+  page,
+}) => {
+  const prevented = await page.evaluate(() => {
+    const dispatch = (target: Element, shiftKey = false) =>
+      !target.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 24,
+          clientY: 32,
+          shiftKey,
+        }),
+      );
+    const paragraph = document.querySelector("#document p");
+    const topbar = document.querySelector(".topbar");
+    if (!paragraph || !topbar) throw new Error("Expected context menu targets");
+    return {
+      document: dispatch(paragraph),
+      toolbar: dispatch(topbar),
+      productionShift: dispatch(paragraph, true),
+    };
+  });
+  expect(prevented).toEqual({ document: true, toolbar: true, productionShift: true });
+
+  const paragraph = page.locator(".review-block p").first();
+  await paragraph.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  await paragraph.click({ button: "right" });
+  const menu = page.locator("#review-context-menu");
+  await expect(menu).toBeVisible();
+  await expect(page.locator("#context-copy-selection")).toBeFocused();
+  await page.locator("#context-copy-selection").click();
+  await expect(page.locator("#toast-message")).toHaveText("Selected text copied.");
+  const copied = await page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __markdownReviewHost?: { clipboardWrites: string[] };
+        }
+      ).__markdownReviewHost?.clipboardWrites ?? [],
+  );
+  expect(copied).toEqual(["Select and review this paragraph."]);
+
+  await page.evaluate(() => {
+    window.getSelection()?.removeAllRanges();
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  await page.locator("#document").focus();
+  await page.keyboard.press("Shift+F10");
+  await expect(page.locator("#context-comment-document")).toBeFocused();
+  const menuResults = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(menuResults.violations).toEqual([]);
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#line-pill")).toHaveText("Whole document");
+  await expect(page.locator("#quote")).toBeHidden();
+  await page.locator("#feedback").fill("Reframe the whole document around the decision.");
+  await page.locator("#feedback").press("Enter");
+  await expect(page.locator(".document-feedback-group")).toContainText(
+    "Reframe the whole document around the decision.",
+  );
+  await expect(page.locator(".annotation-badge")).toHaveCount(0);
+  expect(await reviewHighlightCount(page)).toBe(0);
+
+  await page.reload();
+  await expect(page.locator(".document-feedback-group")).toContainText(
+    "Reframe the whole document around the decision.",
+  );
+  await page.locator("#comments-toggle").click();
+  await expect(page.getByRole("button", { name: "Go to document for comment 1" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.locator("#send-all").click();
+  await expect(page.locator("html")).toHaveAttribute("data-submitted-message-count", "1");
+  const messages = await page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __markdownReviewHost?: { messages: unknown[] };
+        }
+      ).__markdownReviewHost?.messages ?? [],
+  );
+  expect(submittedReviewEnvelope(submittedMessageText(messages))).toMatchObject({
+    review: {
+      items: [
+        {
+          lines: [1, expect.any(Number)],
+          quote: "Whole document: review fixture.md",
+          comment: "Reframe the whole document around the decision.",
+        },
+      ],
+    },
+  });
+});
+
+test("keeps heading boundaries and inserted comment UI out of saved highlights", async ({
+  page,
+}) => {
+  const heading = page.locator(".review-block h1").first();
+  const paragraph = page.locator(".review-block p").first();
+  await expect(heading).toHaveText("Markdown Review Fixture");
+  await paragraph.evaluate((element) => {
+    const headingText = document.querySelector(".review-block h1")?.firstChild;
+    const paragraphText = element.firstChild;
+    if (!(headingText instanceof Text) || !(paragraphText instanceof Text)) {
+      throw new Error("Expected boundary-selection fixture");
+    }
+    const range = document.createRange();
+    range.setStart(headingText, headingText.data.length);
+    range.setEnd(paragraphText, paragraphText.data.length);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  await page.locator("#selection-action").click();
+  await expect(page.locator("#line-pill")).toHaveText("Line 3");
+  await expect(page.locator("#quote")).toHaveText("Select and review this paragraph.");
+  await page.locator("#feedback").fill("Boundary selection");
+  await page.locator("#feedback").press("Enter");
+
+  await paragraph.evaluate((element) => {
+    const headingText = document.querySelector(".review-block h1")?.firstChild;
+    const paragraphText = element.firstChild;
+    if (!(headingText instanceof Text) || !(paragraphText instanceof Text)) {
+      throw new Error("Expected cross-block selection fixture");
+    }
+    const range = document.createRange();
+    range.setStart(headingText, 0);
+    range.setEnd(paragraphText, paragraphText.data.length);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  await page.locator("#selection-action").click();
+  await page.locator("#feedback").fill("Cross-block selection");
+  await page.locator("#feedback").press("Enter");
+
+  expect(
+    await page.evaluate(() => {
+      const highlight = (
+        CSS as unknown as {
+          readonly highlights?: { get(name: string): Iterable<Range> | undefined };
+        }
+      ).highlights?.get("review-comments");
+      const reviewUi = [...document.querySelectorAll<HTMLElement>(".queued-card")];
+      return highlight
+        ? [...highlight].some((range) => reviewUi.some((element) => range.intersectsNode(element)))
+        : true;
+    }),
+  ).toBe(false);
+});
+
 test("renders PNG, JPEG, and static WebP without network access and passes axe", async ({
   page,
 }) => {
@@ -149,6 +310,13 @@ test("renders PNG, JPEG, and static WebP without network access and passes axe",
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
     .analyze();
   expect(results.violations).toEqual([]);
+
+  await page.locator("#review-actions").click();
+  const menuResults = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(menuResults.violations).toEqual([]);
+  await page.keyboard.press("Escape");
 
   const paragraph = page.locator(".review-block p").first();
   await paragraph.evaluate((element) => {
@@ -174,7 +342,7 @@ test("renders PNG, JPEG, and static WebP without network access and passes axe",
     await page.evaluate(() =>
       getComputedStyle(document.documentElement).getPropertyValue("--review-highlight-bg").trim(),
     ),
-  ).toBe("#fff1a8");
+  ).toBe("rgba(9, 105, 218, 0.16)");
   await page.locator("#comments-toggle").click();
   const drawerResults = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
@@ -186,7 +354,7 @@ test("renders PNG, JPEG, and static WebP without network access and passes axe",
     await page.evaluate(() =>
       getComputedStyle(document.documentElement).getPropertyValue("--review-highlight-bg").trim(),
     ),
-  ).toBe("#4b3f16");
+  ).toBe("rgba(145, 180, 242, 0.2)");
   const darkResults = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
     .analyze();
@@ -198,7 +366,9 @@ test("comments on images with pointer and keyboard and restores the target highl
 }) => {
   const png = page.getByRole("button", { name: "Add feedback for image: PNG pixel" });
   await expect(png).toBeVisible();
-  await png.click();
+  await png.click({ button: "right" });
+  await expect(page.locator("#context-comment-image")).toBeVisible();
+  await page.locator("#context-comment-image").click();
   await expect(page.locator("#feedback")).toBeFocused();
   await expect(page.locator("#quote")).toHaveText("Image: PNG pixel");
   await expect(png).toHaveClass(/is-selected/);
@@ -409,10 +579,12 @@ test("survives rapid narrow resizing with an open comments rail", async ({ page 
     expect(workspaceBox.x + workspaceBox.width).toBeLessThanOrEqual(commentsBox.x + 1);
     expect(commentsBox.x + commentsBox.width).toBeLessThanOrEqual(width + 1);
     const topbarButtons = await page.locator(".topbar button").evaluateAll((buttons) =>
-      buttons.map((button) => {
-        const rect = button.getBoundingClientRect();
-        return { left: rect.left, right: rect.right, width: rect.width, height: rect.height };
-      }),
+      buttons
+        .filter((button) => button.getClientRects().length > 0)
+        .map((button) => {
+          const rect = button.getBoundingClientRect();
+          return { left: rect.left, right: rect.right, width: rect.width, height: rect.height };
+        }),
     );
     for (const button of topbarButtons) {
       expect(button.left).toBeGreaterThanOrEqual(-1);
@@ -450,6 +622,20 @@ test("reflows at 320 CSS pixels and honors accessibility media", async ({ page }
   await page.setViewportSize({ width: 320, height: 640 });
   await queueFirstParagraph(page, "Forced-colors highlight");
   await page.emulateMedia({ reducedMotion: "reduce", forcedColors: "active" });
+  await page.locator("#review-actions").click();
+  const menuBox = await page.locator("#review-context-menu").boundingBox();
+  if (!menuBox) throw new Error("Expected review context menu geometry");
+  expect(menuBox.x).toBeGreaterThanOrEqual(7);
+  expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(313);
+  const focusedMenuItem = page.locator("#review-context-menu [role='menuitem']:focus");
+  await expect(focusedMenuItem).toBeVisible();
+  const focusIndicator = await focusedMenuItem.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { style: style.outlineStyle, width: Number.parseFloat(style.outlineWidth) };
+  });
+  expect(focusIndicator.style).not.toBe("none");
+  expect(focusIndicator.width).toBeGreaterThanOrEqual(2);
+  await page.keyboard.press("Escape");
   await expect(page.locator("#document h1")).toBeVisible();
   expect(await reviewHighlightCount(page)).toBe(1);
   const horizontalOverflow = await page.evaluate(() =>

@@ -99,11 +99,16 @@ export interface ReviewStateStore {
   save(snapshot: PersistedReviewState): Promise<void>;
 }
 
+export interface ClipboardPort {
+  writeText(text: string): Promise<void>;
+}
+
 export interface MarkdownReviewPorts {
   readonly documents: DocumentPort;
   readonly submissions: SubmissionPort;
   readonly presentation: PresentationPort;
   readonly state: ReviewStateStore;
+  readonly clipboard?: ClipboardPort;
 }
 
 export interface DecodedReviewImage {
@@ -132,6 +137,7 @@ export interface MountMarkdownReviewOptions {
   readonly ports: MarkdownReviewPorts;
   readonly initialDocument?: ReviewDocument;
   readonly imageDecoder?: ReviewImageDecoder;
+  readonly allowNativeDevTools?: boolean;
 }
 
 export interface MarkdownReviewHandle {

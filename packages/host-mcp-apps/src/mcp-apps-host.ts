@@ -265,6 +265,15 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
       },
     },
     state: createReviewStateStore(hostWindow),
+    clipboard: {
+      async writeText(text) {
+        const clipboard = Reflect.get(hostWindow.navigator, "clipboard") as Clipboard | undefined;
+        if (!clipboard || typeof clipboard.writeText !== "function") {
+          throw new Error("Clipboard access is unavailable in this host");
+        }
+        await clipboard.writeText(text);
+      },
+    },
   };
 
   return {

@@ -7,7 +7,7 @@ Markdown Review is a local-first MCP Apps interface for reviewing rendered Markd
 ## What it provides
 
 - A fullscreen, GitHub-style Markdown preview in the side panel.
-- Normal text selection and copying, followed by a compact `+` action for feedback.
+- Normal text selection and copying, plus a review menu for selected-text, image, and whole-document feedback.
 - Focusable image review targets for pointer, touch, and keyboard comments.
 - Inline comment markers numbered `#1`, `#2`, and so on.
 - A review queue that submits all comments together to avoid conflicting edits.
@@ -88,7 +88,7 @@ Open /absolute/path/to/document.md for Markdown review.
 In the review:
 
 1. Select text and copy it normally if needed, or choose a rendered image.
-2. Use the selection's `+` action—or activate the image's **Comment** control—to open the compact inline composer.
+2. Right-click the document or choose **Review** for copy and comment actions. The selection's `+` action and each image target remain direct shortcuts.
 3. Press Enter to queue the comment; use Shift+Enter for a new line.
 4. Reference an earlier queued comment with `#1`, `#2`, and so on.
 5. Select **Submit** when the review round is complete.
@@ -118,6 +118,8 @@ bun run browser:harness -- /absolute/path/to/document.md
 
 Set `MARKDOWN_REVIEW_PREVIEW_COMPOSER=1` to open the feedback composer automatically in the harness.
 
+The plugin suppresses the host's native context menu by default. For local plugin debugging only, set `MARKDOWN_REVIEW_DEVTOOLS=1` in the MCP server environment and restart Codex; `Shift+right-click` then bypasses the review menu and opens the host-native menu. Ordinary right-click continues to show review actions. The flag is parsed strictly—only the exact value `1` enables the bypass—and is never enabled in the checked-in `.mcp.json`.
+
 To test this checkout as a local marketplace, add its absolute directory:
 
 ```sh
@@ -129,10 +131,11 @@ Then restart the desktop app and install the plugin from the local marketplace s
 ## Safety and privacy boundaries
 
 - The component cannot write the Markdown file.
+- The native browser context menu is suppressed inside the plugin unless the local MCP server starts with the explicit developer flag; this is UI hardening, not a security boundary around Codex App's own menus or shortcuts.
 - Rendered HTML is sanitized before it reaches the component.
 - Remote, absolute, and out-of-directory images are not loaded.
 - Only relative paths to PNG, JPEG (`.jpg`/`.jpeg`), and static WebP files inside the Markdown file's directory are supported. The server verifies extension, signature, bounded container structure, dimensions, and animation policy before the browser performs native decoding. GIF, AVIF, SVG, APNG, and animated WebP are not rendered.
-- The component resource declares no network or remote resource domains.
+- The component resource declares no network or remote resource domains and requests only clipboard-write access for the explicit **Copy selected text** action.
 - A Markdown file is limited to 2 MiB.
 - A review processes at most 64 local-image references—including invalid references—5 MiB per unique image, and 12 MiB of unique image snapshots in total, with strict per-image decoded-dimension limits. Every valid reference is rendered: the browser fairly shares a bounded 24-megapixel canvas budget across the document and downscales large images for display instead of omitting them. References that resolve to the same canonical file or identical digest share one immutable snapshot and verified client decode.
 - Canonical paths and opened-file identities are rechecked around each bounded read. These checks are defense in depth, not an OS sandbox against another local process that can continuously replace the document directory hierarchy during a read.

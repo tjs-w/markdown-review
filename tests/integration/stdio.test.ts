@@ -97,7 +97,7 @@ describe("checked-in Node stdio bundle", () => {
         "load_markdown_review_image_chunk",
       ]);
 
-      const resource = await client.readResource({ uri: "ui://markdown-review/v22.html" });
+      const resource = await client.readResource({ uri: "ui://markdown-review/v24.html" });
       const content = resource.contents[0];
       expect(content?.mimeType).toBe("text/html;profile=mcp-app");
       const html = content && "text" in content ? content.text : "";
@@ -105,7 +105,7 @@ describe("checked-in Node stdio bundle", () => {
       expect(html).toContain(">Submit<");
       expect(html).toContain('aria-describedby="review-help-tooltip"');
       expect(html).toContain('id="review-help-tooltip" role="tooltip"');
-      expect(html).toContain("Select text or choose an image to comment ·");
+      expect(html).toContain("Right-click or use Review actions ·");
       expect(html).not.toContain("MARKDOWN_REVIEW_APP");
 
       const opened = await client.callTool({

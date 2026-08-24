@@ -39449,6 +39449,7 @@ var MAX_IMAGE_ID_LENGTH = 128;
 var MAX_QUOTE_LENGTH = 1400;
 var MAX_TEXT_ANCHOR_CONTEXT_LENGTH = 64;
 var MAX_FEEDBACK_LENGTH = 2400;
+var MAX_CLIPBOARD_TEXT_LENGTH = 2 * 1024 * 1024;
 var MAX_DOCUMENT_TITLE_LENGTH = 256;
 var MAX_RENDERED_HTML_LENGTH = 16 * 1024 * 1024;
 var MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -39558,14 +39559,21 @@ var ReviewSelectionSchema = external_exports.object({
   anchorY: external_exports.number().min(0).max(1),
   quote: external_exports.string().max(MAX_QUOTE_LENGTH),
   textAnchor: ReviewTextAnchorSchema.optional(),
-  imageId: external_exports.string().min(1).max(MAX_IMAGE_ID_LENGTH).optional()
+  imageId: external_exports.string().min(1).max(MAX_IMAGE_ID_LENGTH).optional(),
+  scope: external_exports.literal("document").optional()
 }).strict().refine((selection) => selection.endLine >= selection.startLine, {
   message: "endLine must be greater than or equal to startLine",
   path: ["endLine"]
 }).refine((selection) => !(selection.textAnchor && selection.imageId), {
   message: "A review selection cannot contain both text and image anchors",
   path: ["imageId"]
-});
+}).refine(
+  (selection) => !(selection.scope !== void 0 && [selection.textAnchor, selection.imageId].some((anchor) => anchor !== void 0)),
+  {
+    message: "A document-level review cannot contain a text or image anchor",
+    path: ["scope"]
+  }
+);
 var QueuedFeedbackSchema = ReviewSelectionSchema.extend({
   id: external_exports.string().min(1).max(MAX_QUEUE_ID_LENGTH),
   serial: PositiveSafeIntegerSchema,
@@ -51192,9 +51200,12 @@ var EMPTY_COMPLETION_RESULT = {
 };
 
 // packages/mcp-server/src/server.ts
-var MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v22.html";
+var MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v24.html";
 var REVIEW_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
 var SERVER_INSTRUCTIONS = "Use open_markdown_review only to render an absolute .md or .markdown path. The Markdown file is canonical. Review comments have stable #N serials within one queued review round and may reference earlier queued comments by serial; treat #N as a reference only when the feedback payload explicitly lists it as one, because literal #N text is supported. The component submits the full queue as one batch, clears it after a successful submission, and restarts numbering at #1. Discuss question-only items without editing, apply explicit change requests with normal filesystem tools, then reopen the review after any edits.";
+function developerModeEnabled(value) {
+  return value === "1";
+}
 function errorMessage(error51) {
   return error51 instanceof Error ? error51.message : String(error51);
 }
@@ -51235,7 +51246,8 @@ function createMarkdownReviewServer(options) {
       _meta: {
         ui: {
           prefersBorder: true,
-          csp: { connectDomains: [], resourceDomains: [] }
+          csp: { connectDomains: [], resourceDomains: [] },
+          permissions: { clipboardWrite: {} }
         }
       }
     },
@@ -51248,18 +51260,20 @@ function createMarkdownReviewServer(options) {
         REVIEW_BUNDLE_MARKER,
         () => `<script>${reviewBundle.replaceAll("</script", "<\\/script")}</script>`
       );
+      const configuredHtml = options.allowNativeDevTools ? html.replace("<html", '<html data-markdown-review-developer-mode="true"') : html;
       return {
         contents: [
           {
             uri: MARKDOWN_REVIEW_TEMPLATE_URI,
             mimeType: p,
-            text: html,
+            text: configuredHtml,
             _meta: {
               ui: {
                 prefersBorder: true,
-                csp: { connectDomains: [], resourceDomains: [] }
+                csp: { connectDomains: [], resourceDomains: [] },
+                permissions: { clipboardWrite: {} }
               },
-              "openai/widgetDescription": "Fullscreen rendered Markdown review with copy-friendly selection and queued, line-anchored feedback for the underlying source file.",
+              "openai/widgetDescription": "Fullscreen rendered Markdown review with copy and queued passage, image, and whole-document feedback for the underlying source file.",
               "openai/widgetPrefersBorder": true
             }
           }
@@ -51520,7 +51534,10 @@ var assetLoader = createFileReviewUiAssetLoader({
   templatePath: (0, import_node_path4.resolve)(pluginRoot, "web/review.html"),
   reviewBundlePath: (0, import_node_path4.resolve)(pluginRoot, "web/dist/review.js")
 });
-var server = createMarkdownReviewServer({ assetLoader });
+var server = createMarkdownReviewServer({
+  assetLoader,
+  allowNativeDevTools: developerModeEnabled(process.env["MARKDOWN_REVIEW_DEVTOOLS"])
+});
 var transport = new StdioServerTransport();
 server.connect(transport).catch((error51) => {
   const message = error51 instanceof Error ? error51.stack ?? error51.message : String(error51);

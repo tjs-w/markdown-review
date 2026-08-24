@@ -290,6 +290,27 @@ describe("portable review contracts", () => {
     ).toBe(false);
   });
 
+  test("accepts explicit document scope and rejects anchored document feedback", () => {
+    const selection = {
+      startLine: 1,
+      endLine: 4,
+      anchorX: 0.5,
+      anchorY: 0,
+      quote: "Whole document: review.md",
+      scope: "document",
+    } as const;
+    expect(ReviewSelectionSchema.safeParse(selection).success).toBe(true);
+    expect(
+      ReviewSelectionSchema.safeParse({ ...selection, imageId: "local-image-1" }).success,
+    ).toBe(false);
+    expect(
+      ReviewSelectionSchema.safeParse({
+        ...selection,
+        textAnchor: { version: 1, start: 2, end: 10, prefix: "a", suffix: "b" },
+      }).success,
+    ).toBe(false);
+  });
+
   test("rejects duplicate persisted queue IDs", () => {
     const item = {
       id: "duplicate",

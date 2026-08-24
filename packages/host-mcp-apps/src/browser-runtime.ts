@@ -13,6 +13,7 @@ export interface BrowserRuntimeDependencies {
   readonly imageDecoder?: ReviewImageDecoder;
   readonly mount?: typeof mountMarkdownReview;
   readonly submissionFormatter?: McpAppsHostOptions["submissionFormatter"];
+  readonly allowNativeDevTools?: boolean;
 }
 
 export interface MarkdownReviewRuntime {
@@ -52,7 +53,11 @@ export function startMarkdownReviewRuntime(
     },
   });
 
-  const handle = mount({ ports: host.ports, imageDecoder });
+  const handle = mount({
+    ports: host.ports,
+    imageDecoder,
+    allowNativeDevTools: dependencies.allowNativeDevTools === true,
+  });
   reviewRef.current = handle;
   reconnect = () => {
     void host.connect().catch((error: unknown) => {

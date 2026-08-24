@@ -1,6 +1,6 @@
 {
   "name": "markdown-review",
-  "version": "0.1.0+codex.20260824194156",
+  "version": "0.1.0+codex.20260824204059",
   "description": "Review rendered Markdown with Codex while keeping the .md file canonical.",
   "author": {
     "name": "Tejas",
@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "Markdown Review",
     "shortDescription": "Queue feedback on rendered Markdown.",
-    "longDescription": "Opens rendered Markdown fullscreen, keeps text selection copy-friendly, and queues inline passage feedback for one batch message to Codex.",
+    "longDescription": "Opens rendered Markdown fullscreen with selected-text copy plus passage, image, and whole-document feedback in one batch message to Codex.",
     "developerName": "Tejas",
     "category": "Productivity",
     "capabilities": [

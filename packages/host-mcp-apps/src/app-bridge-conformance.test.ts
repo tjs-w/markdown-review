@@ -219,6 +219,36 @@ describe("official MCP Apps AppBridge conformance", () => {
     await closeHarness(harness);
   });
 
+  test("writes only through the feature-detected host clipboard", async () => {
+    const copied: string[] = [];
+    const host = createMcpAppsHost({
+      hostWindow: {
+        navigator: {
+          clipboard: {
+            writeText(text: string) {
+              copied.push(text);
+              return Promise.resolve();
+            },
+          },
+        },
+      } as unknown as Window,
+      onDocument: () => undefined,
+    });
+    await host.ports.clipboard?.writeText("Exact source selection");
+    expect(copied).toEqual(["Exact source selection"]);
+
+    const unavailable = createMcpAppsHost({
+      hostWindow: { navigator: {} } as unknown as Window,
+      onDocument: () => undefined,
+    });
+    expect(
+      await rejectionMessage(
+        unavailable.ports.clipboard?.writeText("text") ??
+          Promise.reject(new Error("Missing clipboard adapter")),
+      ),
+    ).toContain("Clipboard access is unavailable");
+  });
+
   test("awaits the adapter flush before acknowledging host teardown", async () => {
     let teardownCount = 0;
     let finishTeardown: (() => void) | undefined;

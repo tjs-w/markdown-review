@@ -10,7 +10,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { LoadedAssetChunk, OpenedMarkdownReview } from "@markdown-review/markdown-node";
 
 import { createFileReviewUiAssetLoader } from "../src/assets.js";
-import { createMarkdownReviewServer, MARKDOWN_REVIEW_TEMPLATE_URI } from "../src/server.js";
+import {
+  createMarkdownReviewServer,
+  developerModeEnabled,
+  MARKDOWN_REVIEW_TEMPLATE_URI,
+} from "../src/server.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -85,6 +89,7 @@ describe("createMarkdownReviewServer", () => {
     };
     const server = createMarkdownReviewServer({
       backend,
+      allowNativeDevTools: true,
       assetLoader: {
         load() {
           return Promise.resolve({
@@ -108,6 +113,12 @@ describe("createMarkdownReviewServer", () => {
       ]);
       expect(toolVisibility(tools.tools[1]?._meta)).toEqual(["app"]);
       expect(toolVisibility(tools.tools[2]?._meta)).toEqual(["app"]);
+      const resources = await client.listResources();
+      expect(resources.resources[0]?._meta?.["ui"]).toEqual({
+        prefersBorder: true,
+        csp: { connectDomains: [], resourceDomains: [] },
+        permissions: { clipboardWrite: {} },
+      });
 
       const result = await client.callTool({
         name: "open_markdown_review",
@@ -136,9 +147,15 @@ describe("createMarkdownReviewServer", () => {
       const resource = await client.readResource({ uri: MARKDOWN_REVIEW_TEMPLATE_URI });
       const resourceContent = resource.contents[0];
       const html = resourceContent && "text" in resourceContent ? resourceContent.text : "";
+      expect(html).toContain('data-markdown-review-developer-mode="true"');
       expect(html).toContain("window.review = '$&'");
       expect(html).not.toContain("MARKDOWN_REVIEW_APP");
       expect(html).toContain("<\\/script");
+      expect(resourceContent?._meta?.["ui"]).toEqual({
+        prefersBorder: true,
+        csp: { connectDomains: [], resourceDomains: [] },
+        permissions: { clipboardWrite: {} },
+      });
     } finally {
       await client.close();
       await server.close();
@@ -220,9 +237,24 @@ describe("createMarkdownReviewServer", () => {
       });
       expect(JSON.stringify(unknown)).not.toContain(summary.path);
       expect(JSON.stringify(unknown)).not.toContain(reviewSessionId);
+
+      const resource = await client.readResource({ uri: MARKDOWN_REVIEW_TEMPLATE_URI });
+      const content = resource.contents[0];
+      expect(content && "text" in content ? content.text : "").not.toContain(
+        "data-markdown-review-developer-mode",
+      );
     } finally {
       await client.close();
       await server.close();
+    }
+  });
+});
+
+describe("developer mode flag", () => {
+  test("enables native DevTools only for the exact value 1", () => {
+    expect(developerModeEnabled("1")).toBe(true);
+    for (const value of [undefined, "", "true", "yes", "TRUE", "01"]) {
+      expect(developerModeEnabled(value)).toBe(false);
     }
   });
 });

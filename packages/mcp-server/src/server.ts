@@ -19,7 +19,7 @@ import { z } from "zod";
 
 import type { ReviewUiAssetLoader } from "./assets.js";
 
-export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v22.html";
+export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v24.html";
 const REVIEW_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
 
 const SERVER_INSTRUCTIONS =
@@ -35,6 +35,11 @@ export interface CreateMarkdownReviewServerOptions {
   readonly assetLoader: ReviewUiAssetLoader;
   readonly backend?: MarkdownReviewBackend;
   readonly version?: string;
+  readonly allowNativeDevTools?: boolean;
+}
+
+export function developerModeEnabled(value: string | undefined): boolean {
+  return value === "1";
 }
 
 function errorMessage(error: unknown): string {
@@ -96,6 +101,7 @@ export function createMarkdownReviewServer(options: CreateMarkdownReviewServerOp
         ui: {
           prefersBorder: true,
           csp: { connectDomains: [], resourceDomains: [] },
+          permissions: { clipboardWrite: {} },
         },
       },
     },
@@ -108,19 +114,23 @@ export function createMarkdownReviewServer(options: CreateMarkdownReviewServerOp
         REVIEW_BUNDLE_MARKER,
         () => `<script>${reviewBundle.replaceAll("</script", "<\\/script")}</script>`,
       );
+      const configuredHtml = options.allowNativeDevTools
+        ? html.replace("<html", '<html data-markdown-review-developer-mode="true"')
+        : html;
       return {
         contents: [
           {
             uri: MARKDOWN_REVIEW_TEMPLATE_URI,
             mimeType: RESOURCE_MIME_TYPE,
-            text: html,
+            text: configuredHtml,
             _meta: {
               ui: {
                 prefersBorder: true,
                 csp: { connectDomains: [], resourceDomains: [] },
+                permissions: { clipboardWrite: {} },
               },
               "openai/widgetDescription":
-                "Fullscreen rendered Markdown review with copy-friendly selection and queued, line-anchored feedback for the underlying source file.",
+                "Fullscreen rendered Markdown review with copy and queued passage, image, and whole-document feedback for the underlying source file.",
               "openai/widgetPrefersBorder": true,
             },
           },

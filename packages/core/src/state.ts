@@ -79,6 +79,7 @@ function candidateQueueItem(
 
   const possibleSerial = Number(item["serial"]);
   const textAnchor = ReviewTextAnchorSchema.safeParse(item["textAnchor"]);
+  const documentScope = item["scope"] === "document";
   const imageId =
     typeof item["imageId"] === "string" && item["imageId"].length > 0
       ? item["imageId"].slice(0, MAX_IMAGE_ID_LENGTH)
@@ -100,7 +101,13 @@ function candidateQueueItem(
     anchorX: Math.max(0, Math.min(1, finiteNumber(item["anchorX"], 0.96))),
     anchorY: Math.max(0, Math.min(1, finiteNumber(item["anchorY"], 1))),
     quote: typeof item["quote"] === "string" ? item["quote"].slice(0, MAX_QUOTE_LENGTH) : "",
-    ...(imageId ? { imageId } : textAnchor.success ? { textAnchor: textAnchor.data } : {}),
+    ...(documentScope
+      ? { scope: "document" as const }
+      : imageId
+        ? { imageId }
+        : textAnchor.success
+          ? { textAnchor: textAnchor.data }
+          : {}),
     feedback,
     createdAt:
       typeof item["createdAt"] === "string" && item["createdAt"].length > 0

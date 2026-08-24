@@ -85,6 +85,7 @@ describe("browser composition runtime", () => {
         createHost,
         imageDecoder,
         mount,
+        allowNativeDevTools: true,
       });
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       expect(shownErrors[0]?.error).toEqual(new Error("connect failed"));
@@ -94,6 +95,7 @@ describe("browser composition runtime", () => {
       await hostOptions?.onDocument(documentFixture);
       expect(opened).toEqual([documentFixture]);
       expect(mountOptions?.ports).toBe(ports);
+      expect(mountOptions?.allowNativeDevTools).toBe(true);
       expect(hostOptions?.submissionFormatter).toBeUndefined();
       expect((await mountOptions?.imageDecoder?.decode(new Uint8Array(), "image/png"))?.width).toBe(
         1,

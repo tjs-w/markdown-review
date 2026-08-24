@@ -105,6 +105,26 @@ describe("persisted state migration", () => {
     expect(normalized.queue[0]?.textAnchor).toBeUndefined();
   });
 
+  test("preserves document scope and removes conflicting legacy anchors", () => {
+    const normalized = normalizePersistedReviewState(
+      {
+        path: document.path,
+        queue: [
+          {
+            ...queuedItem({ quote: "Whole document: review.md" }),
+            scope: "document",
+            imageId: "local-image-1",
+            textAnchor: { version: 1, start: 4, end: 17, prefix: "pre", suffix: "post" },
+          },
+        ],
+      },
+      now,
+    );
+    expect(normalized.queue[0]?.scope).toBe("document");
+    expect(normalized.queue[0]?.imageId).toBeUndefined();
+    expect(normalized.queue[0]?.textAnchor).toBeUndefined();
+  });
+
   test("caps the queue, repairs serials, clamps anchors, and ignores legacy history", () => {
     const inputQueue = Array.from({ length: 25 }, (_, index) => ({
       id: `id-${index}`,
@@ -296,6 +316,27 @@ describe("pure queue and submission state", () => {
       },
     ]);
     expect(batch.items[0]).not.toHaveProperty("imageId");
+  });
+
+  test("keeps document feedback compatible with the stable line-and-quote contract", () => {
+    const wholeDocument = queuedItem({
+      startLine: 1,
+      endLine: 4,
+      quote: "Whole document: review.md",
+      scope: "document",
+      feedback: "Reorganize the document around the decision.",
+    });
+    const batch = buildReviewBatch(document, [wholeDocument]);
+    expect(batch.items).toEqual([
+      {
+        id: "#1",
+        refs: [],
+        lines: [1, 4],
+        quote: "Whole document: review.md",
+        comment: "Reorganize the document around the decision.",
+      },
+    ]);
+    expect(batch.items[0]).not.toHaveProperty("scope");
   });
 
   test("retains one stable attempt after failure and clears submitted IDs on success", () => {

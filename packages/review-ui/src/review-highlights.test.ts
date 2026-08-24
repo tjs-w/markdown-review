@@ -80,6 +80,23 @@ describe("review text highlights", () => {
     expect(root.querySelector("p")?.lastChild?.textContent).toContain("beta");
   });
 
+  test("anchors a selection after a heading to the first text it actually contains", () => {
+    const root = installDocument();
+    const headingTail = root.querySelector("p")?.lastChild;
+    const followingText = root.querySelectorAll("p")[1]?.firstChild;
+    if (!(headingTail instanceof Text) || !(followingText instanceof Text)) {
+      throw new Error("Expected adjacent text blocks");
+    }
+    const range = document.createRange();
+    range.setStart(headingTail, headingTail.data.length);
+    range.setEnd(followingText, 5);
+
+    const captured = captureReviewTextAnchor(root, range);
+    expect(captured?.quote).toBe("Delta");
+    expect(captured?.startBlock.dataset["startLine"]).toBe("3");
+    expect(captured?.endBlock.dataset["endLine"]).toBe("4");
+  });
+
   test("captures selections across formatting and blocks with UTF-16 offsets", () => {
     const root = installDocument();
     const beta = root.querySelector("em")?.firstChild;
@@ -105,6 +122,60 @@ describe("review text highlights", () => {
       ]),
     ).toBe(1);
     expect(root.querySelectorAll("mark.review-highlight").length).toBeGreaterThan(1);
+  });
+
+  test("keeps native highlight ranges out of review UI inserted between selected blocks", () => {
+    const root = installDocument();
+    const firstText = root.querySelector("em")?.firstChild;
+    const finalText = root.querySelectorAll("p")[1]?.firstChild;
+    if (!(firstText instanceof Text) || !(finalText instanceof Text)) {
+      throw new Error("Expected cross-block text");
+    }
+    const range = document.createRange();
+    range.setStart(firstText, 0);
+    range.setEnd(finalText, 5);
+    const captured = captureReviewTextAnchor(root, range);
+    if (!captured) throw new Error("Expected captured anchor");
+
+    const comment = document.createElement("aside");
+    comment.dataset["reviewUi"] = "queued-comment";
+    comment.textContent = "Comment quote must remain unhighlighted";
+    root.querySelector(".review-block")?.insertAdjacentElement("afterend", comment);
+
+    const originalCss = Object.getOwnPropertyDescriptor(window, "CSS");
+    const originalHighlight = Object.getOwnPropertyDescriptor(window, "Highlight");
+    let registeredRanges: Range[] = [];
+    const TestHighlight = function (...ranges: Range[]): void {
+      registeredRanges = ranges;
+    };
+    Object.defineProperty(window, "CSS", {
+      configurable: true,
+      value: { highlights: { set: () => undefined, delete: () => true } },
+    });
+    Object.defineProperty(window, "Highlight", { configurable: true, value: TestHighlight });
+    try {
+      expect(
+        renderReviewHighlights(root, [
+          {
+            id: "feedback-1",
+            serial: 1,
+            startLine: 1,
+            endLine: 4,
+            quote: captured.quote,
+            textAnchor: captured.textAnchor,
+          },
+        ]),
+      ).toBe(1);
+      expect(registeredRanges).toHaveLength(2);
+      expect(registeredRanges.map((registered) => registered.toString()).join(" ")).not.toContain(
+        "Comment quote",
+      );
+    } finally {
+      if (originalCss) Object.defineProperty(window, "CSS", originalCss);
+      else delete (window as Window & { CSS?: unknown }).CSS;
+      if (originalHighlight) Object.defineProperty(window, "Highlight", originalHighlight);
+      else delete (window as Window & { Highlight?: unknown }).Highlight;
+    }
   });
 
   test("segments overlapping comments without nesting fallback marks", () => {

@@ -10,12 +10,15 @@ export interface ReviewHighlightAnchor {
   readonly quote: string;
   readonly textAnchor?: ReviewTextAnchor | undefined;
   readonly imageId?: string | undefined;
+  readonly scope?: "document" | undefined;
   readonly stale?: boolean | undefined;
 }
 
 export interface CapturedReviewTextAnchor {
   readonly quote: string;
   readonly textAnchor: ReviewTextAnchor;
+  readonly startBlock: HTMLElement;
+  readonly endBlock: HTMLElement;
 }
 
 interface SourceTextNode {
@@ -131,6 +134,10 @@ function boundaryOffset(
   return nodes.at(-1)?.end ?? 0;
 }
 
+function comparableSelectionText(value: string): string {
+  return value.replace(/\s+/gu, "");
+}
+
 export function captureReviewTextAnchor(
   root: HTMLElement,
   range: Range,
@@ -148,6 +155,10 @@ export function captureReviewTextAnchor(
   if (end <= start) return null;
 
   const quote = index.source.slice(start, end);
+  if (comparableSelectionText(quote) !== comparableSelectionText(range.toString())) return null;
+  const startNode = index.nodes.find((entry) => entry.start <= start && start < entry.end);
+  const endNode = index.nodes.find((entry) => entry.start < end && end <= entry.end);
+  if (!startNode || !endNode) return null;
   return {
     quote,
     textAnchor: {
@@ -157,6 +168,8 @@ export function captureReviewTextAnchor(
       prefix: index.source.slice(Math.max(0, start - MAX_TEXT_ANCHOR_CONTEXT_LENGTH), start),
       suffix: index.source.slice(end, end + MAX_TEXT_ANCHOR_CONTEXT_LENGTH),
     },
+    startBlock: startNode.block,
+    endBlock: endNode.block,
   };
 }
 
@@ -221,25 +234,37 @@ function intervalForAnchor(
   index: SourceIndex,
   anchor: ReviewHighlightAnchor,
 ): HighlightInterval | null {
-  if (anchor.imageId) return null;
+  if (anchor.imageId || anchor.scope === "document") return null;
   return (
     intervalFromTextAnchor(index, anchor) ??
     (anchor.textAnchor ? null : intervalFromLegacyQuote(index, anchor))
   );
 }
 
-function rangeForInterval(index: SourceIndex, interval: HighlightInterval): Range | null {
-  const startNode = index.nodes.find(
-    (entry) => entry.start <= interval.start && interval.start < entry.end,
+function rangesForInterval(index: SourceIndex, interval: HighlightInterval): Range[] {
+  const entries = index.nodes.filter(
+    (entry) => interval.start < entry.end && interval.end > entry.start,
   );
-  const endNode = index.nodes.find(
-    (entry) => entry.start < interval.end && interval.end <= entry.end,
-  );
-  if (!startNode || !endNode) return null;
-  const range = startNode.node.ownerDocument.createRange();
-  range.setStart(startNode.node, interval.start - startNode.start);
-  range.setEnd(endNode.node, interval.end - endNode.start);
-  return range;
+  const ranges: Range[] = [];
+  let first: SourceTextNode | undefined;
+  let last: SourceTextNode | undefined;
+  const appendRange = (): void => {
+    if (!first || !last) return;
+    const range = first.node.ownerDocument.createRange();
+    range.setStart(first.node, Math.max(interval.start, first.start) - first.start);
+    range.setEnd(last.node, Math.min(interval.end, last.end) - last.start);
+    ranges.push(range);
+  };
+  for (const entry of entries) {
+    if (last && last.block !== entry.block) {
+      appendRange();
+      first = undefined;
+    }
+    first ??= entry;
+    last = entry;
+  }
+  appendRange();
+  return ranges;
 }
 
 export function findReviewHighlightBlock(
@@ -309,17 +334,21 @@ export function renderReviewHighlights(
     const interval = intervalForAnchor(index, anchor);
     return interval ? [interval] : [];
   });
-  const ranges = intervals.flatMap((interval) => {
-    const range = rangeForInterval(index, interval);
-    return range ? [range] : [];
-  });
+  const resolved = intervals
+    .map((interval) => ({ interval, ranges: rangesForInterval(index, interval) }))
+    .filter((entry) => entry.ranges.length > 0);
+  const ranges = resolved.flatMap((entry) => entry.ranges);
 
   const view = root.ownerDocument.defaultView as HighlightWindow | null;
   const registry = view?.CSS?.highlights;
   if (registry && view.Highlight) {
     if (ranges.length > 0) registry.set(HIGHLIGHT_NAME, new view.Highlight(...ranges));
   } else {
-    renderFallbackHighlights(root, index, intervals);
+    renderFallbackHighlights(
+      root,
+      index,
+      resolved.map((entry) => entry.interval),
+    );
   }
-  return ranges.length;
+  return resolved.length;
 }

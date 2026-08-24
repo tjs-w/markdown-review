@@ -36,13 +36,20 @@ const reviewDocument: ReviewDocument = {
 function installShell(): void {
   document.body.innerHTML = `
     <div class="topbar"><span id="launcher-count"></span><span id="top-count"></span>
-      <button id="comments-toggle"></button><button id="send-all" hidden><span id="send-all-label"></span><span id="send-all-count"></span></button>
+      <button id="review-actions" aria-expanded="false"></button><button id="comments-toggle"></button><button id="send-all" hidden><span id="send-all-label"></span><span id="send-all-count"></span></button>
       <button id="theme-toggle"></button><button id="refresh"></button></div>
     <span id="launcher-meta"></span>
     <aside id="comments-panel" hidden><button id="close-comments"></button><div id="comments-list"></div></aside>
     <button id="selection-action" hidden></button><button id="open-review"></button>
-    <main class="workspace"><article class="markdown" id="document"></article></main>
-    <section id="review-composer" hidden><h2 id="composer-title"></h2><button id="close-composer"></button>
+    <main class="workspace"><article class="markdown" id="document" tabindex="0"></article></main>
+    <div id="review-context-menu" role="menu" hidden>
+      <button id="context-copy-selection" role="menuitem" data-context-action="copy-selection"></button>
+      <button id="context-comment-selection" role="menuitem" data-context-action="comment-selection"></button>
+      <button id="context-comment-image" role="menuitem" data-context-action="comment-image"></button>
+      <div id="context-selection-separator"></div>
+      <button id="context-comment-document" role="menuitem" data-context-action="comment-document"></button>
+    </div>
+    <section id="review-composer" data-review-ui="composer" hidden><h2 id="composer-title"></h2><button id="close-composer"></button>
       <button id="composer-help-toggle"></button><div id="composer-help-popover" hidden></div>
       <span id="line-pill"></span><blockquote id="quote"></blockquote><textarea id="feedback"></textarea>
       <p id="feedback-message"></p><button id="add-queue"><span id="add-queue-label"></span></button></section>
@@ -89,6 +96,7 @@ interface HarnessOptions {
   readonly save?: (snapshot: PersistedReviewState) => Promise<void>;
   readonly openExternal?: (url: URL) => Promise<void>;
   readonly requestDisplayMode?: MarkdownReviewPorts["presentation"]["requestDisplayMode"];
+  readonly writeClipboard?: (text: string) => Promise<void>;
 }
 
 function createHarness(options: HarnessOptions = {}) {
@@ -130,6 +138,7 @@ function createHarness(options: HarnessOptions = {}) {
         return options.save?.(snapshot) ?? Promise.resolve();
       },
     },
+    ...(options.writeClipboard ? { clipboard: { writeText: options.writeClipboard } } : {}),
   };
   return {
     ports,
@@ -182,6 +191,18 @@ function selectText(blockIndex = 0): void {
   selection?.removeAllRanges();
   selection?.addRange(range);
   document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+}
+
+function openContextMenu(target: Element, init: MouseEventInit = {}): MouseEvent {
+  const event = new MouseEvent("contextmenu", {
+    bubbles: true,
+    cancelable: true,
+    clientX: 40,
+    clientY: 50,
+    ...init,
+  });
+  target.dispatchEvent(event);
+  return event;
 }
 
 async function queueComment(feedback: string, blockIndex = 0): Promise<void> {
@@ -285,6 +306,331 @@ describe("mountMarkdownReview", () => {
     expect(document.querySelectorAll("mark.review-highlight")).toHaveLength(2);
     handle.destroy();
     expect(document.querySelector("mark.review-highlight")).toBeNull();
+  });
+
+  test("replaces the native menu by default and permits only the flagged Shift bypass", async () => {
+    installShell();
+    const first = createHarness();
+    const production = mountMarkdownReview({
+      ports: first.ports,
+      initialDocument: reviewDocument,
+    });
+    await settle();
+    const paragraph = document.querySelector("#document p");
+    const topbar = document.querySelector(".topbar");
+    if (!paragraph || !topbar) throw new Error("Expected context-menu targets");
+
+    const documentMenu = openContextMenu(paragraph);
+    expect(documentMenu.defaultPrevented).toBe(true);
+    expect(document.getElementById("review-context-menu")?.hidden).toBe(false);
+    const outsideMenu = openContextMenu(topbar);
+    expect(outsideMenu.defaultPrevented).toBe(true);
+    expect(document.getElementById("review-context-menu")?.hidden).toBe(true);
+    const productionShift = openContextMenu(paragraph, { shiftKey: true });
+    expect(productionShift.defaultPrevented).toBe(true);
+    production.destroy();
+
+    installShell();
+    const second = createHarness();
+    const development = mountMarkdownReview({
+      ports: second.ports,
+      initialDocument: reviewDocument,
+      allowNativeDevTools: true,
+    });
+    await settle();
+    const devParagraph = document.querySelector("#document p");
+    if (!devParagraph) throw new Error("Expected development context-menu target");
+    const normal = openContextMenu(devParagraph);
+    expect(normal.defaultPrevented).toBe(true);
+    const bypass = openContextMenu(devParagraph, { shiftKey: true });
+    expect(bypass.defaultPrevented).toBe(false);
+    expect(document.getElementById("review-context-menu")?.hidden).toBe(true);
+    development.destroy();
+  });
+
+  test("copies the exact source selection and never copies inserted review UI", async () => {
+    installShell();
+    const longText = "x".repeat(1_600);
+    const copied: string[] = [];
+    const longDocument: ReviewDocument = {
+      ...reviewDocument,
+      lineCount: 1,
+      blockCount: 1,
+      html: `<section class="review-block" data-start-line="1" data-end-line="1"><p>${longText}</p></section>`,
+    };
+    const harness = createHarness({
+      writeClipboard(text) {
+        copied.push(text);
+        return Promise.resolve();
+      },
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: longDocument });
+    await settle();
+    const text = document.querySelector("#document p")?.firstChild;
+    const paragraph = document.querySelector("#document p");
+    if (!(text instanceof Text) || !paragraph) throw new Error("Expected long source text");
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+    paragraph.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 2 }));
+    selection?.removeAllRanges();
+    openContextMenu(paragraph);
+    expect(document.getElementById("context-copy-selection")?.hidden).toBe(false);
+    document.getElementById("context-copy-selection")?.click();
+    await settle();
+    expect(copied).toEqual([longText]);
+    expect(document.getElementById("toast-message")?.textContent).toBe("Selected text copied.");
+
+    handle.destroy();
+    installShell();
+    const stored = persisted([
+      queued({ id: "feedback-1", serial: 1, feedback: "Inserted review UI" }),
+    ]);
+    const restored = createHarness({
+      initialState: stored,
+      writeClipboard: () => Promise.resolve(),
+    });
+    const restoredHandle = mountMarkdownReview({
+      ports: restored.ports,
+      initialDocument: reviewDocument,
+    });
+    await settle();
+    const sourceText = document.querySelector("#document p")?.firstChild?.firstChild;
+    const cardText = document.querySelector(".queued-card")?.lastChild;
+    const sourceParagraph = document.querySelector("#document p");
+    if (!(sourceText instanceof Text) || !cardText || !sourceParagraph) {
+      throw new Error("Expected source and queued review UI");
+    }
+    const crossing = document.createRange();
+    crossing.setStart(sourceText, 0);
+    crossing.setEndAfter(cardText);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(crossing);
+    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+    openContextMenu(sourceParagraph);
+    expect(document.getElementById("context-copy-selection")?.hidden).toBe(true);
+    expect(document.getElementById("context-comment-selection")?.hidden).toBe(true);
+    restoredHandle.destroy();
+  });
+
+  test("surfaces clipboard denial without exposing selected content", async () => {
+    installShell();
+    const harness = createHarness({
+      writeClipboard: () => Promise.reject(new Error("sensitive clipboard detail")),
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    selectText();
+    const paragraph = document.querySelector("#document p");
+    if (!paragraph) throw new Error("Expected review paragraph");
+    openContextMenu(paragraph);
+    document.getElementById("context-copy-selection")?.click();
+    await settle();
+    expect(document.getElementById("toast-message")?.textContent).toBe(
+      "Could not copy the selected text. Check clipboard permission and try again.",
+    );
+    expect(document.getElementById("toast-message")?.textContent).not.toContain("First paragraph");
+    handle.destroy();
+  });
+
+  test("copies a multi-block source selection with its document separator", async () => {
+    installShell();
+    const copied: string[] = [];
+    const harness = createHarness({
+      writeClipboard(text) {
+        copied.push(text);
+        return Promise.resolve();
+      },
+    });
+    const multiBlockDocument: ReviewDocument = {
+      ...reviewDocument,
+      html:
+        '<section class="review-block" data-start-line="1" data-end-line="2"><p>First paragraph for review.</p></section>' +
+        '<section class="review-block" data-start-line="3" data-end-line="4"><p>Second paragraph for review.</p></section>',
+    };
+    const handle = mountMarkdownReview({
+      ports: harness.ports,
+      initialDocument: multiBlockDocument,
+    });
+    await settle();
+    const paragraphs = document.querySelectorAll("#document p");
+    const first = paragraphs[0]?.firstChild;
+    const second = paragraphs[1]?.firstChild;
+    if (!(first instanceof Text) || !(second instanceof Text)) {
+      throw new Error("Expected multi-block source text");
+    }
+    const range = document.createRange();
+    range.setStart(first, 0);
+    range.setEnd(second, second.data.length);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+    openContextMenu(paragraphs.item(1));
+    document.getElementById("context-copy-selection")?.click();
+    await settle();
+    expect(copied).toEqual(["First paragraph for review.\nSecond paragraph for review."]);
+    handle.destroy();
+  });
+
+  test("supports keyboard menu navigation and whole-document feedback persistence", async () => {
+    installShell();
+    const harness = createHarness({ submit: () => Promise.resolve() });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    const actions = document.getElementById("review-actions") as HTMLButtonElement;
+    actions.focus();
+    actions.click();
+    const menu = document.getElementById("review-context-menu");
+    const documentItem = document.getElementById("context-comment-document") as HTMLButtonElement;
+    expect(menu?.hidden).toBe(false);
+    expect(document.activeElement).toBe(documentItem);
+    documentItem.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(menu?.hidden).toBe(true);
+    expect(document.activeElement).toBe(actions);
+
+    selectText();
+    const paragraph = document.querySelector("#document p");
+    if (!paragraph) throw new Error("Expected keyboard context-menu paragraph");
+    openContextMenu(paragraph);
+    const copyItem = document.getElementById("context-copy-selection") as HTMLButtonElement;
+    const selectionItem = document.getElementById("context-comment-selection") as HTMLButtonElement;
+    expect(document.activeElement).toBe(copyItem);
+    copyItem.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    expect(document.activeElement).toBe(selectionItem);
+    selectionItem.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    expect(document.activeElement).toBe(documentItem);
+    documentItem.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    expect(document.activeElement).toBe(copyItem);
+    copyItem.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(menu?.hidden).toBe(true);
+    expect(document.activeElement).toBe(paragraph.closest(".review-block"));
+
+    const surface = document.getElementById("document");
+    if (!surface) throw new Error("Expected keyboard document surface");
+    window.getSelection()?.removeAllRanges();
+    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+    surface.focus();
+    surface.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }),
+    );
+    expect(menu?.hidden).toBe(false);
+    documentItem.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(document.getElementById("review-composer")?.hidden).toBe(false);
+    expect(document.getElementById("line-pill")?.textContent).toBe("Whole document");
+    expect(document.getElementById("quote")?.hidden).toBe(true);
+
+    const field = document.getElementById("feedback") as HTMLTextAreaElement;
+    field.value = "Reorganize the whole document.";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    document.getElementById("add-queue")?.click();
+    await settle();
+    const saved = harness.saves.at(-1);
+    expect(saved?.queue[0]).toMatchObject({
+      scope: "document",
+      startLine: 1,
+      endLine: reviewDocument.lineCount,
+      quote: "Whole document: review.md",
+    });
+    expect(document.querySelectorAll("[data-feedback-annotation]")).toHaveLength(0);
+    expect(document.querySelectorAll("mark.review-highlight")).toHaveLength(0);
+    expect(document.querySelector(".document-feedback-group .card-quote")).toBeNull();
+    expect(document.querySelector(".document-feedback-group .card-feedback")?.textContent).toBe(
+      "Reorganize the whole document.",
+    );
+    document
+      .querySelector<HTMLButtonElement>('.document-feedback-group [data-queue-action="edit"]')
+      ?.click();
+    expect(document.getElementById("line-pill")?.textContent).toBe("Whole document");
+    field.value = "Reorganize the whole document around the conclusion.";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    document.getElementById("add-queue")?.click();
+    await settle();
+    expect(harness.saves.at(-1)?.queue[0]?.scope).toBe("document");
+    document
+      .querySelector<HTMLButtonElement>('.document-feedback-group [data-queue-action="remove"]')
+      ?.click();
+    await settle();
+    expect(document.querySelector(".document-feedback-group")).toBeNull();
+    document.getElementById("toast-action")?.click();
+    await settle();
+    expect(document.querySelector(".document-feedback-group")).not.toBeNull();
+    document.getElementById("comments-toggle")?.click();
+    expect(document.querySelector('[data-comment-action="go"]')?.textContent).toBe(
+      "Go to document",
+    );
+    document.getElementById("comments-toggle")?.click();
+    document.getElementById("send-all")?.click();
+    await settle(5);
+    expect(harness.submissions[0]?.batch.items[0]).toEqual({
+      id: "#1",
+      refs: [],
+      lines: [1, reviewDocument.lineCount],
+      quote: "Whole document: review.md",
+      comment: "Reorganize the whole document around the conclusion.",
+    });
+    handle.destroy();
+  });
+
+  test("queues whole-document feedback for an empty Markdown file", async () => {
+    installShell();
+    const emptyDocument: ReviewDocument = {
+      ...reviewDocument,
+      sizeBytes: 0,
+      lineCount: 0,
+      blockCount: 0,
+      html: "",
+    };
+    const harness = createHarness();
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: emptyDocument });
+    await settle();
+    document.getElementById("review-actions")?.click();
+    document.getElementById("context-comment-document")?.click();
+    const field = document.getElementById("feedback") as HTMLTextAreaElement;
+    field.value = "Add an overview.";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    document.getElementById("add-queue")?.click();
+    await settle();
+    expect(harness.saves.at(-1)?.queue[0]).toMatchObject({
+      scope: "document",
+      startLine: 1,
+      endLine: 1,
+    });
+    expect(document.querySelectorAll("[data-feedback-annotation]")).toHaveLength(0);
+    handle.destroy();
+  });
+
+  test("excludes an adjacent heading when the selection starts at its trailing boundary", async () => {
+    installShell();
+    const boundaryDocument: ReviewDocument = {
+      ...reviewDocument,
+      lineCount: 3,
+      html:
+        '<section class="review-block" data-start-line="1" data-end-line="1"><h2>Review method</h2></section>' +
+        '<section class="review-block" data-start-line="3" data-end-line="3"><p>Selected paragraph.</p></section>',
+    };
+    const harness = createHarness();
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: boundaryDocument });
+    await settle();
+    const heading = document.querySelector("h2")?.firstChild;
+    const paragraph = document.querySelector("p")?.firstChild;
+    if (!(heading instanceof Text) || !(paragraph instanceof Text)) {
+      throw new Error("Expected boundary-selection fixture");
+    }
+    const range = document.createRange();
+    range.setStart(heading, heading.data.length);
+    range.setEnd(paragraph, paragraph.data.length);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+    document.getElementById("selection-action")?.click();
+
+    expect(document.getElementById("line-pill")?.textContent).toBe("Line 3");
+    expect(document.getElementById("quote")?.textContent).toBe("Selected paragraph.");
+    handle.destroy();
   });
 
   test("flush waits for queued state persistence before teardown", async () => {
@@ -946,10 +1292,14 @@ describe("mountMarkdownReview", () => {
       expect(target?.getAttribute("aria-label")).toBe(
         "Add feedback for image: Architecture diagram",
       );
-      target?.click();
+      if (!target) throw new Error("Expected image review target");
+      openContextMenu(target);
+      expect(document.getElementById("context-comment-image")?.hidden).toBe(false);
+      expect(document.getElementById("context-copy-selection")?.hidden).toBe(true);
+      document.getElementById("context-comment-image")?.click();
       expect(document.getElementById("review-composer")?.hidden).toBe(false);
       expect(document.getElementById("quote")?.textContent).toBe("Image: Architecture diagram");
-      expect(target?.classList.contains("is-selected")).toBe(true);
+      expect(target.classList.contains("is-selected")).toBe(true);
       const feedback = document.getElementById("feedback") as HTMLTextAreaElement;
       feedback.value = "Increase the diagram labels.";
       feedback.dispatchEvent(new Event("input", { bubbles: true }));
@@ -959,7 +1309,7 @@ describe("mountMarkdownReview", () => {
       expect(saved?.queue[0]?.imageId).toBe("local-image-1");
       expect(saved?.queue[0]?.quote).toBe("Image: Architecture diagram");
       expect(targets[0]?.classList.contains("has-comments")).toBe(false);
-      expect(target?.classList.contains("has-comments")).toBe(true);
+      expect(target.classList.contains("has-comments")).toBe(true);
       if (!saved) throw new Error("Expected queued state to be saved");
 
       firstHandle.destroy();

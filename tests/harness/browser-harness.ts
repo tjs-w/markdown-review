@@ -56,7 +56,7 @@ const transport = new StdioClientTransport({
 const client = new Client({ name: "markdown-review-browser-harness", version: "0.1.0" });
 await client.connect(transport);
 
-const resource = await client.readResource({ uri: "ui://markdown-review/v22.html" });
+const resource = await client.readResource({ uri: "ui://markdown-review/v24.html" });
 const resourceContent = resource.contents[0];
 if (!resourceContent || !("text" in resourceContent)) {
   throw new Error("The Markdown Review HTML resource was not returned");
@@ -109,9 +109,19 @@ const hostScript = `<script>
     externalLinks: [],
     toolCalls: [],
     toolResults: [],
+    clipboardWrites: [],
     widgetState: seededWidgetState,
     setWidgetStateCalls: 0
   };
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText(text) {
+        state.clipboardWrites.push(text);
+        return Promise.resolve();
+      }
+    }
+  });
   if (query.get("codex") === "1") {
     window.openai = {
       widgetState: seededWidgetState,

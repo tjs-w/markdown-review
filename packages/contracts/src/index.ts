@@ -10,6 +10,7 @@ export const MAX_IMAGE_ID_LENGTH = 128;
 export const MAX_QUOTE_LENGTH = 1400;
 export const MAX_TEXT_ANCHOR_CONTEXT_LENGTH = 64;
 export const MAX_FEEDBACK_LENGTH = 2400;
+export const MAX_CLIPBOARD_TEXT_LENGTH = 2 * 1024 * 1024;
 export const MAX_DOCUMENT_TITLE_LENGTH = 256;
 export const MAX_RENDERED_HTML_LENGTH = 16 * 1024 * 1024;
 export const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -161,6 +162,7 @@ export const ReviewSelectionSchema = z
     quote: z.string().max(MAX_QUOTE_LENGTH),
     textAnchor: ReviewTextAnchorSchema.optional(),
     imageId: z.string().min(1).max(MAX_IMAGE_ID_LENGTH).optional(),
+    scope: z.literal("document").optional(),
   })
   .strict()
   .refine((selection) => selection.endLine >= selection.startLine, {
@@ -170,7 +172,18 @@ export const ReviewSelectionSchema = z
   .refine((selection) => !(selection.textAnchor && selection.imageId), {
     message: "A review selection cannot contain both text and image anchors",
     path: ["imageId"],
-  });
+  })
+  .refine(
+    (selection) =>
+      !(
+        selection.scope !== undefined &&
+        [selection.textAnchor, selection.imageId].some((anchor) => anchor !== undefined)
+      ),
+    {
+      message: "A document-level review cannot contain a text or image anchor",
+      path: ["scope"],
+    },
+  );
 
 export const QueuedFeedbackSchema = ReviewSelectionSchema.extend({
   id: z.string().min(1).max(MAX_QUEUE_ID_LENGTH),
