@@ -164,9 +164,7 @@ test("supports a keyboard-only queue, dialog, and submit journey", async ({ page
     selection?.addRange(range);
     document.dispatchEvent(new Event("selectionchange"));
   });
-  const addFeedback = page.locator("#selection-action");
-  await addFeedback.focus();
-  await page.keyboard.press("Enter");
+  await page.keyboard.press("Control+Shift+M");
   const feedback = page.locator("#feedback");
   await expect(feedback).toBeFocused();
   await page.keyboard.type("Keyboard review feedback");
