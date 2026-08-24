@@ -10,4 +10,5 @@ All notable changes to this project will be documented here.
 - Added stable comment references within a review round and escaped literal references.
 - Added safe relative local PNG rendering through private, bounded chunks.
 - Kept full document content out of model-visible MCP tool results.
+- Reduced Send all messages to a versioned, Codex-oriented review envelope.
 - Added the automatic Markdown review skill, smoke tests, and a browser UI harness.

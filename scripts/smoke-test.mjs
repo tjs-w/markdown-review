@@ -45,7 +45,8 @@ try {
   assert.doesNotMatch(resource.contents[0].text, /Send this now|id="send-now"/);
   assert.match(resource.contents[0].text, /id="composer-help-toggle"/);
   assert.match(resource.contents[0].text, /id="composer-help-popover"/);
-  assert.match(resource.contents[0].text, /referencedComments/);
+  assert.match(resource.contents[0].text, /markdown-review\/v1/);
+  assert.match(resource.contents[0].text, /Use \$markdown-review/);
   assert.match(resource.contents[0].text, /untrusted quoted data/);
   assert.match(resource.contents[0].text, /ui\/initialize/);
   assert.match(resource.contents[0].text, /load_markdown_review_document/);

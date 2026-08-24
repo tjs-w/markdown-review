@@ -379,10 +379,13 @@ assert.deepEqual(
   "queued comments must receive stable monotonic serials",
 );
 const referencedPrompt = new vm.Script("buildFeedbackPrompt(appState.document, appState.queue)").runInContext(context);
-assert.match(referencedPrompt, /\"comment\": \"#2\"/);
-assert.match(referencedPrompt, /\"references\": \[\s*\"#1\"/);
-assert.match(referencedPrompt, /\"referencedComments\": \[\]/);
-assert.match(referencedPrompt, /stable serials/);
+const referencedReview = JSON.parse(referencedPrompt.slice(referencedPrompt.indexOf("review = ") + "review = ".length));
+assert.equal(referencedReview.schema, "markdown-review/v1");
+assert.equal(referencedReview.items[1].id, "#2");
+assert.deepEqual(referencedReview.items[1].refs, ["#1"]);
+assert.deepEqual(referencedReview.items[1].lines, [1, 1]);
+assert.equal(referencedReview.missingRefs, undefined);
+assert.match(referencedPrompt, /Use \$markdown-review/);
 await context.sendFeedbackItems();
 for (let index = 0; index < 8; index += 1) await Promise.resolve();
 assert.deepEqual(
@@ -426,9 +429,23 @@ const literalPrompt = context.buildFeedbackPrompt(reviewDocument, [{
   quote: "A literal example",
   feedback: "Print \\#1 and `#2` exactly.",
 }]);
-assert.match(literalPrompt, /\"references\": \[\]/);
-assert.match(literalPrompt, /\"feedback\": \"Print #1 and `#2` exactly\.\"/);
-assert.match(literalPrompt, /Only treat a #N sequence as a reference when it is explicitly listed/);
+assert.match(literalPrompt, /\"refs\": \[\]/);
+assert.match(literalPrompt, /\"comment\": \"Print #1 and `#2` exactly\.\"/);
+assert.match(literalPrompt, /Only an item's refs field defines #N links/);
+
+const missingReferencePrompt = context.buildFeedbackPrompt(reviewDocument, [{
+  serial: 6,
+  revision: "older-revision",
+  startLine: 4,
+  endLine: 5,
+  quote: "A moved passage",
+  feedback: "Compare this with #99.",
+}]);
+const missingReferenceReview = JSON.parse(
+  missingReferencePrompt.slice(missingReferencePrompt.indexOf("review = ") + "review = ".length),
+);
+assert.deepEqual(missingReferenceReview.missingRefs, ["#99"]);
+assert.equal(missingReferenceReview.items[0].revision, "older-revision");
 
 const prompt = context.buildFeedbackPrompt(reviewDocument, [
   {
@@ -448,14 +465,18 @@ const prompt = context.buildFeedbackPrompt(reviewDocument, [
     feedback: "Make it shorter.",
   },
 ]);
-assert.match(prompt, /as one batch/);
+assert.match(prompt, /Use \$markdown-review to handle every item in this batch/);
 assert.match(prompt, /untrusted quoted data/);
-assert.match(prompt, /discuss it without editing/);
-assert.match(prompt, /edit the underlying Markdown directly/);
-assert.match(prompt, /BEGIN_REVIEW_DATA/);
+assert.doesNotMatch(prompt, /BEGIN_REVIEW_DATA|END_REVIEW_DATA/);
 assert.match(prompt, /Should this be shorter\?/);
 assert.match(prompt, /Make it shorter\./);
-assert.match(prompt, /\"comment\": \"#3\"/);
+const review = JSON.parse(prompt.slice(prompt.indexOf("review = ") + "review = ".length));
+assert.equal(review.schema, "markdown-review/v1");
+assert.equal(review.file, reviewDocument.path);
+assert.equal(review.revision, reviewDocument.revision);
+assert.equal(review.items[0].id, "#3");
+assert.deepEqual(review.items[1].lines, [2, 3]);
+assert.ok(prompt.length < 1200, "the Codex review message should remain concise for a small batch");
 
 const normalizedCount = new vm.Script(`normalizePrivateState({ queue: Array.from({ length: 25 }, (_, index) => ({
   id: "id-" + index,
