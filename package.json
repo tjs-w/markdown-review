@@ -1,20 +1,22 @@
 {
-  "name": "codex-markdown-review",
+  "name": "markdown-review",
   "version": "0.1.0",
   "private": true,
-  "description": "A rendered Markdown review surface for Codex with queued, line-anchored feedback.",
+  "description": "A local-first Markdown review surface with queued, line-anchored feedback for MCP Apps hosts.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tjs-w/codex-markdown-review.git"
+    "url": "git+https://github.com/tjs-w/markdown-review.git"
   },
-  "homepage": "https://github.com/tjs-w/codex-markdown-review#readme",
+  "homepage": "https://github.com/tjs-w/markdown-review#readme",
   "bugs": {
-    "url": "https://github.com/tjs-w/codex-markdown-review/issues"
+    "url": "https://github.com/tjs-w/markdown-review/issues"
   },
   "keywords": [
     "codex",
     "markdown",
     "mcp",
+    "mcp-apps",
+    "typescript",
     "review"
   ],
   "engines": {

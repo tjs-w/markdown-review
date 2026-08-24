@@ -1,6 +1,6 @@
 # Contributing
 
-Contributions to Codex Markdown Review should preserve one core invariant: the `.md` or `.markdown` file is the only canonical document. The review component renders and annotates it but never writes an HTML mirror or edits the source directly.
+Contributions to Markdown Review should preserve one core invariant: the `.md` or `.markdown` file is the only canonical document. The review component renders and annotates it but never writes an HTML mirror or edits the source directly.
 
 ## Development workflow
 

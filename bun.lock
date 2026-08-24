@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "codex-markdown-review",
+      "name": "markdown-review",
       "dependencies": {
         "@modelcontextprotocol/ext-apps": "^1.7.5",
         "@modelcontextprotocol/sdk": "^1.30.0",
@@ -63,6 +63,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@markdown-review/contracts": "workspace:*",
+        "fast-png": "^8.0.0",
         "marked": "^18.0.10",
         "sanitize-html": "^2.17.7",
       },

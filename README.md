@@ -1,6 +1,6 @@
-# Codex Markdown Review
+# Markdown Review
 
-Codex Markdown Review is a local Codex plugin for reviewing rendered Markdown without creating a second, editable copy of the document. Select a passage, queue line-anchored feedback, and submit the complete review to Codex in one batch. Codex then discusses the comments or edits the original `.md` file.
+Markdown Review is a local-first MCP Apps interface for reviewing rendered Markdown without creating a second, editable copy of the document. Select a passage, queue line-anchored feedback, and submit the complete review to a coding agent in one batch. Codex App is the first shipped interactive host; the core contracts, state, and UI are intentionally host-neutral for future Claude, pi, terminal, and Tauri adapters.
 
 > **Status:** early development. Codex App is the shipped interactive host; the reusable UI and MCP transport follow the MCP Apps standard so additional host adapters can be added without rewriting the review core.
 
@@ -63,15 +63,15 @@ Requirements:
 Add this repository as a marketplace:
 
 ```sh
-codex plugin marketplace add tjs-w/codex-markdown-review --ref main
+codex plugin marketplace add tjs-w/markdown-review --ref main
 ```
 
-Restart the desktop app, open the Plugins Directory, select **Codex Markdown Review**, and install **Markdown Review**. Start a new task after installation so the task receives the plugin tool registration.
+Restart the desktop app, open the Plugins Directory, select **Markdown Review**, and install the plugin. Start a new task after installation so the task receives the plugin tool registration.
 
 To refresh an existing installation:
 
 ```sh
-codex plugin marketplace upgrade codex-markdown-review
+codex plugin marketplace upgrade markdown-review
 ```
 
 Restart the desktop app and start a new task after an upgrade. Existing tasks retain the tool and skill registrations they started with.
@@ -97,8 +97,8 @@ After a successful submission, the queue clears and the next review round begins
 ## Local development
 
 ```sh
-git clone https://github.com/tjs-w/codex-markdown-review.git
-cd codex-markdown-review
+git clone https://github.com/tjs-w/markdown-review.git
+cd markdown-review
 bun install --frozen-lockfile
 bun run verify
 ```
@@ -120,7 +120,7 @@ Set `MARKDOWN_REVIEW_PREVIEW_COMPOSER=1` to open the feedback composer automatic
 To test this checkout as a local marketplace, add its absolute directory:
 
 ```sh
-codex plugin marketplace add /absolute/path/to/codex-markdown-review
+codex plugin marketplace add /absolute/path/to/markdown-review
 ```
 
 Then restart the desktop app and install the plugin from the local marketplace source.
