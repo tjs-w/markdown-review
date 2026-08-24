@@ -1,6 +1,6 @@
 {
   "name": "markdown-review",
-  "version": "0.1.0+codex.20260824132539",
+  "version": "0.1.0+codex.20260824154617",
   "description": "Review rendered Markdown with Codex while keeping the .md file canonical.",
   "author": {
     "name": "Tejas",
