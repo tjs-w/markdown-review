@@ -15,6 +15,8 @@ assert.match(html, /class="selection-action"[\s\S]*?<svg class="ui-icon"/);
 assert.match(html, /Queue feedback/);
 assert.match(html, /id="send-all"/);
 assert.doesNotMatch(html, /Send this now|id="send-now"/);
+assert.match(html, />Submit<\/span>/);
+assert.doesNotMatch(html, /Send all/);
 assert.match(html, /id="comments-panel"/);
 assert.match(html, /id="composer-help-toggle"/);
 assert.match(html, /id="composer-help-popover"/);
@@ -321,8 +323,16 @@ assert.equal(enterPrevented, true);
 assert.equal(new vm.Script("appState.queue.length").runInContext(context), 1);
 assert.equal(element("send-all").hidden, false);
 assert.equal(element("send-all").disabled, false);
-assert.equal(element("send-all-label").textContent, "Send all");
+assert.equal(element("send-all-label").textContent, "Submit");
 assert.equal(element("send-all-count").textContent, "(1)");
+assert.equal(element("send-all").getAttribute("aria-label"), "Submit 1 queued comments");
+new vm.Script("appState.sendingIds.add(appState.queue[0].id)").runInContext(context);
+context.syncSendingUi();
+assert.equal(element("send-all").disabled, true);
+assert.equal(element("send-all-label").textContent, "Submitting…");
+assert.equal(element("send-all").getAttribute("aria-label"), "Submitting review feedback");
+new vm.Script("appState.sendingIds.clear()").runInContext(context);
+context.syncSendingUi();
 assert.equal(selectionCleared, true);
 assert.ok(widgetStates.at(-1)?.privateContent?.queue?.length === 1);
 assert.equal(widgetStates.at(-1)?.privateContent?.theme, "light");
@@ -343,7 +353,7 @@ assert.equal(element("comments-panel").hidden, true);
 assert.equal(document.activeElement, element("comments-toggle"));
 
 context.openComposer(pendingSelection);
-assert.equal(element("send-all").disabled, true, "the full queue cannot be sent while a comment is being drafted");
+assert.equal(element("send-all").disabled, true, "the full queue cannot be submitted while a comment is being drafted");
 element("feedback").value = "First line";
 context.updateComposerActions();
 let shiftEnterPrevented = false;
@@ -391,7 +401,7 @@ for (let index = 0; index < 8; index += 1) await Promise.resolve();
 assert.deepEqual(
   [...new vm.Script("appState.queue.map((item) => item.serial)").runInContext(context)],
   [],
-  "Send all must clear the complete review round",
+  "Submit must clear the complete review round",
 );
 assert.equal(new vm.Script("appState.nextSerial").runInContext(context), 1);
 assert.equal(new vm.Script("appState.history").runInContext(context), undefined);

@@ -352,7 +352,7 @@
           </button>
           <button class="button primary with-icon" id="send-all" type="button" hidden>
             <svg class="ui-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M.989 8 .064 2.68a1.342 1.342 0 0 1 1.85-1.462l13.402 5.744a1.13 1.13 0 0 1 0 2.076L1.913 14.782a1.343 1.343 0 0 1-1.85-1.463L.99 8Zm.603-5.288L2.38 7.25h4.87a.75.75 0 0 1 0 1.5H2.38l-.788 4.538L13.929 8Z"></path></svg>
-            <span class="label" id="send-all-label">Send all</span><span id="send-all-count">(0)</span>
+            <span class="label" id="send-all-label">Submit</span><span id="send-all-count">(0)</span>
           </button>
           <button class="icon-button" id="theme-toggle" type="button" title="Use dark theme" aria-label="Use dark theme" aria-pressed="false">
             <svg class="ui-icon theme-icon-moon" viewBox="0 0 16 16" aria-hidden="true">
@@ -649,15 +649,15 @@
         $("top-count").textContent = String(total);
         $("comments-toggle").setAttribute("aria-label", total === 1 ? "Open 1 review comment" : "Open " + total + " review comments");
         $("send-all").hidden = count === 0;
-        $("send-all-label").textContent = sending ? "Sending…" : "Send all";
+        $("send-all-label").textContent = sending ? "Submitting…" : "Submit";
         $("send-all-count").textContent = "(" + count + ")";
         const composerOpen = !$("review-composer").hidden;
         $("send-all").disabled = count === 0 || sending || composerOpen;
         $("send-all").setAttribute("aria-label", sending
-          ? "Sending review feedback"
+          ? "Submitting review feedback"
           : composerOpen
-            ? "Queue or close the open comment before sending all feedback"
-            : "Send all " + count + " queued comments");
+            ? "Queue or close the open comment before submitting feedback"
+            : "Submit " + count + " queued comments");
         $("launcher-meta").textContent = count
           ? count + (count === 1 ? " feedback item queued" : " feedback items queued")
           : "Open fullscreen review";
@@ -1190,7 +1190,7 @@
       async function sendFeedbackItems() {
         const items = [...appState.queue];
         if (!items.length || !appState.document || appState.sendingIds.size) return;
-        if (!$("review-composer").hidden) return toast("Queue or close the open comment before sending this review round.");
+        if (!$("review-composer").hidden) return toast("Queue or close the open comment before submitting this review round.");
         const fallbackBlock = findAnchorBlock(items[0]);
         appState.sendingIds = new Set(items.map((item) => item.id));
         syncSendingUi();
@@ -1215,9 +1215,9 @@
           renderQueueCards();
           persistUiState();
           succeeded = true;
-          toast(items.length === 1 ? "Comment #" + items[0].serial + " sent to Codex." : items.length + " comments sent to Codex.");
+          toast(items.length === 1 ? "Comment #" + items[0].serial + " submitted to Codex." : items.length + " comments submitted to Codex.");
         } catch (error) {
-          toast("Could not send feedback: " + (error?.message ?? error));
+          toast("Could not submit feedback: " + (error?.message ?? error));
         } finally {
           appState.sendingIds.clear();
           syncSendingUi();

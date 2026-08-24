@@ -41,6 +41,8 @@ try {
   assert.equal(resource.contents[0].mimeType, "text/html;profile=mcp-app");
   assert.match(resource.contents[0].text, /Queue feedback/);
   assert.match(resource.contents[0].text, /id="send-all"/);
+  assert.match(resource.contents[0].text, />Submit<\/span>/);
+  assert.doesNotMatch(resource.contents[0].text, /Send all/);
   assert.match(resource.contents[0].text, /id="comments-panel"/);
   assert.doesNotMatch(resource.contents[0].text, /Send this now|id="send-now"/);
   assert.match(resource.contents[0].text, /id="composer-help-toggle"/);

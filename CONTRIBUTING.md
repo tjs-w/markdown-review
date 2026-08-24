@@ -14,8 +14,8 @@ Contributions to Codex Markdown Review should preserve one core invariant: the `
 ## Design constraints
 
 - Keep normal selection and copying available.
-- Queue review comments by default and send a review round as one batch.
-- Keep comment serials stable within a round and restart at `#1` only after a successful batch send.
+- Queue review comments by default and submit a review round as one batch.
+- Keep comment serials stable within a round and restart at `#1` only after a successful batch submission.
 - Preserve literal `#N` support alongside explicit comment references.
 - Prefer native GitHub Markdown typography and Primer-compatible icon geometry.
 - Maintain keyboard access, visible focus, usable contrast, and reduced-motion behavior.
@@ -25,4 +25,3 @@ Contributions to Codex Markdown Review should preserve one core invariant: the `
 ## Pull requests
 
 Keep changes focused and explain any change to the trust boundary, MCP metadata, comment payload, or installed plugin behavior. Add or update smoke tests for behavior changes. Do not commit `node_modules`, local environment files, or generated test fixtures.
-

@@ -1,6 +1,6 @@
 # Codex Markdown Review
 
-Codex Markdown Review is a local Codex plugin for reviewing rendered Markdown without creating a second, editable copy of the document. Select a passage, queue line-anchored feedback, and send the complete review to Codex in one batch. Codex then discusses the comments or edits the original `.md` file.
+Codex Markdown Review is a local Codex plugin for reviewing rendered Markdown without creating a second, editable copy of the document. Select a passage, queue line-anchored feedback, and submit the complete review to Codex in one batch. Codex then discusses the comments or edits the original `.md` file.
 
 > **Status:** early development. The plugin is designed for the Codex desktop experience and its plugin APIs may continue to evolve.
 
@@ -9,7 +9,7 @@ Codex Markdown Review is a local Codex plugin for reviewing rendered Markdown wi
 - A fullscreen, GitHub-style Markdown preview in the side panel.
 - Normal text selection and copying, followed by a compact `+` action for feedback.
 - Inline comment markers numbered `#1`, `#2`, and so on.
-- A review queue that sends all comments together to avoid conflicting edits.
+- A review queue that submits all comments together to avoid conflicting edits.
 - References between queued comments using `#N`; write `\#N` or `` `#N` `` for literal text.
 - Relative local PNG rendering with bounded, private chunk transport.
 - Automatic review after Codex creates or materially edits a Markdown document.
@@ -76,9 +76,9 @@ In the review:
 2. Use the selection's `+` action to open the compact inline composer.
 3. Press Enter to queue the comment; use Shift+Enter for a new line.
 4. Reference an earlier queued comment with `#1`, `#2`, and so on.
-5. Select **Send all** when the review round is complete.
+5. Select **Submit** when the review round is complete.
 
-After a successful send, the queue clears and the next review round begins again at `#1`. There is deliberately no individual-send action: batching gives Codex one coherent revision target and reduces source conflicts.
+After a successful submission, the queue clears and the next review round begins again at `#1`. There is deliberately no individual-submit action: batching gives Codex one coherent revision target and reduces source conflicts.
 
 ## Local development
 
@@ -154,4 +154,3 @@ Review only files you intend to expose to the local plugin process. Comments ret
 - [OpenAI plugin documentation](https://developers.openai.com/plugins/)
 
 This is an independent project and is not an official OpenAI or GitHub product. Product names and marks belong to their respective owners.
-
