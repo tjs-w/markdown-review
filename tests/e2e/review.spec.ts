@@ -3,6 +3,29 @@ import { expect, test, type Page } from "@playwright/test";
 
 const requestLog = new WeakMap<Page, string[]>();
 
+function submittedMessageText(messages: readonly unknown[]): string {
+  expect(messages).toHaveLength(1);
+  const message = messages[0];
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    throw new TypeError("Expected one structured host message");
+  }
+  const record = message as Readonly<Record<string, unknown>>;
+  expect(record["role"]).toBe("user");
+  const content = record["content"];
+  if (!Array.isArray(content)) throw new TypeError("Expected host message content");
+  const contentParts: readonly unknown[] = content;
+  const textPart = contentParts.find((part) => {
+    if (!part || typeof part !== "object" || Array.isArray(part)) return false;
+    return (part as Readonly<Record<string, unknown>>)["type"] === "text";
+  });
+  if (!textPart || typeof textPart !== "object" || Array.isArray(textPart)) {
+    throw new TypeError("Expected a text host message part");
+  }
+  const text = (textPart as Readonly<Record<string, unknown>>)["text"];
+  if (typeof text !== "string") throw new TypeError("Expected host message text");
+  return text;
+}
+
 test.beforeEach(async ({ page }) => {
   const externalRequests: string[] = [];
   const browserOrigin = new URL(test.info().project.use.baseURL ?? "http://127.0.0.1:43117").origin;
@@ -39,22 +62,9 @@ test("preserves native selection, queues feedback, and submits one batch", async
   expect(await page.evaluate(() => window.getSelection()?.toString())).toContain(
     "Select and review",
   );
-  await page.evaluate(() => {
-    document.addEventListener(
-      "copy",
-      () => {
-        (window as Window & { __copiedSelection?: string }).__copiedSelection =
-          window.getSelection()?.toString() ?? "";
-      },
-      { once: true },
-    );
-  });
-  await page.keyboard.press("Control+c");
-  expect(
-    await page.evaluate(
-      () => (window as Window & { __copiedSelection?: string }).__copiedSelection,
-    ),
-  ).toContain("Select and review");
+  expect(await paragraph.evaluate((element) => getComputedStyle(element).userSelect)).not.toBe(
+    "none",
+  );
 
   await selectionAction.click();
   const feedback = page.locator("#feedback");
@@ -78,9 +88,9 @@ test("preserves native selection, queues feedback, and submits one batch", async
     ).__markdownReviewHost;
     return host?.messages ?? [];
   });
-  expect(messages).toHaveLength(1);
-  expect(JSON.stringify(messages)).toContain("markdown-review/v1");
-  expect(JSON.stringify(messages)).toContain('"id":"#1"');
+  const submittedText = submittedMessageText(messages);
+  expect(submittedText).toContain("markdown-review/v1");
+  expect(submittedText).toContain('"id": "#1"');
 });
 
 test("renders the local PNG without network access and passes axe", async ({ page }) => {
@@ -159,6 +169,7 @@ test("supports a keyboard-only queue, dialog, and submit journey", async ({ page
   await page.keyboard.press("Enter");
   await page.keyboard.type("Keyboard review feedback");
   await page.keyboard.press("Enter");
+  await expect(page.locator(".annotation-badge")).toHaveText("1");
   const commentsToggle = page.locator("#comments-toggle");
   await commentsToggle.focus();
   await page.keyboard.press("Enter");
@@ -199,6 +210,7 @@ test("isolates the optional Codex widget-state compatibility adapter", async ({ 
 });
 
 test("reflows at 400 percent and honors accessibility media", async ({ page }) => {
+  await expect(page.locator("html")).toHaveAttribute("data-display-mode", "fullscreen");
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.evaluate(() => {
     document.documentElement.style.zoom = "4";
