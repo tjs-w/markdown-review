@@ -1,5 +1,6 @@
 export { assembleImageChunks, type EncodedImageChunk } from "./image-assembly";
 export { mountMarkdownReview } from "./mount";
+export { ReviewPortError, shouldRetryPortError } from "./ports";
 export type {
   DisplayMode,
   DecodedReviewImage,
@@ -14,6 +15,8 @@ export type {
   PresentationPort,
   ReviewStateStore,
   ReviewImageDecoder,
+  ReviewPortErrorCode,
+  ReviewServerErrorCode,
   ReviewTheme,
   SubmissionPort,
 } from "./ports";

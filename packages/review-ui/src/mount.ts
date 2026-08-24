@@ -29,6 +29,7 @@ import type {
   ReviewTheme,
 } from "./ports";
 import { assembleImageChunks } from "./image-assembly";
+import { shouldRetryPortError } from "./ports";
 
 const IMAGE_WORKERS = 2;
 const CHUNK_WORKERS = 4;
@@ -183,10 +184,12 @@ async function withRetry<T>(operation: () => Promise<T>, attempts = 2): Promise<
       return await operation();
     } catch (error) {
       lastError = error;
-      if (attempt < attempts) {
+      if (attempt < attempts && shouldRetryPortError(error)) {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 80 * attempt);
         });
+      } else {
+        break;
       }
     }
   }

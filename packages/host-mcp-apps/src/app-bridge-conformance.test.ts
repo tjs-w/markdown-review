@@ -7,11 +7,13 @@ import {
 } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
+  PrivateReviewImageChunkSchema,
   ReviewDocumentSchema,
   ReviewDocumentSummarySchema,
   ReviewSubmissionSchema,
   type ReviewDocument,
 } from "@markdown-review/contracts";
+import { ReviewPortError } from "@markdown-review/review-ui";
 
 import { createMcpAppsHost, type McpAppsHost } from "./mcp-apps-host";
 
@@ -56,6 +58,21 @@ const submission = ReviewSubmissionSchema.parse({
   },
 });
 
+const privateImageChunk = PrivateReviewImageChunkSchema.parse({
+  kind: "markdown-review-image-chunk",
+  reviewSessionId: firstDocument.reviewSessionId,
+  revision: firstDocument.revision,
+  imageId: "local-image-1",
+  imageRevision: "image-revision-a",
+  mimeType: "image/png",
+  chunkIndex: 0,
+  chunkCount: 1,
+  byteOffset: 0,
+  byteLength: 3,
+  data: "AAEC",
+});
+const { data: privateImageData, ...imageChunkSummary } = privateImageChunk;
+
 interface AppBridgeHarness {
   readonly bridge: AppBridge;
   readonly documents: ReviewDocument[];
@@ -66,10 +83,12 @@ interface AppBridgeHarness {
 async function createHarness({
   capabilities = {},
   context = {},
+  onCallTool,
   onTeardown,
 }: {
   readonly capabilities?: McpUiHostCapabilities;
   readonly context?: McpUiHostContext;
+  readonly onCallTool?: NonNullable<AppBridge["oncalltool"]>;
   readonly onTeardown?: () => void;
 } = {}): Promise<AppBridgeHarness> {
   const [appTransport, bridgeTransport] = InMemoryTransport.createLinkedPair();
@@ -81,6 +100,7 @@ async function createHarness({
     capabilities,
     { hostContext: context },
   );
+  bridge.oncalltool = onCallTool;
   const host = createMcpAppsHost({
     hostWindow: { innerWidth: 1024 } as Window,
     transport: appTransport,
@@ -108,6 +128,15 @@ async function rejectionMessage(operation: Promise<unknown>): Promise<string> {
     await operation;
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error("Expected the operation to reject");
+}
+
+async function rejectionError(operation: Promise<unknown>): Promise<Error> {
+  try {
+    await operation;
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
   }
   throw new Error("Expected the operation to reject");
 }
@@ -206,22 +235,23 @@ describe("official MCP Apps AppBridge conformance", () => {
     await closeHarness(harness);
   });
 
-  test("accepts only the first valid initial document despite duplicate and out-of-order events", async () => {
+  test("accepts only the first private initial document despite model-visible and duplicate events", async () => {
     const harness = await createHarness();
 
     await harness.bridge.sendToolResult({
       content: [],
       structuredContent: { document: { ...firstDocument, reviewSessionId: "forged" } },
     });
+    await harness.bridge.sendToolInput({ arguments: { document: firstDocument } });
     await harness.bridge.sendToolResult({
       content: [],
-      structuredContent: { document: laterDocument },
+      _meta: { document: laterDocument },
     });
-    await harness.bridge.sendToolInput({ arguments: { document: firstDocument } });
     await harness.bridge.sendToolResult({
       content: [],
       structuredContent: { document: firstDocument },
     });
+    await harness.bridge.sendToolResult({ content: [], _meta: { document: firstDocument } });
 
     expect(harness.documents).toEqual([laterDocument]);
     expect(harness.errors.map((error) => error.message)).toEqual([
@@ -292,6 +322,167 @@ describe("official MCP Apps AppBridge conformance", () => {
       queueMicrotask(resolve);
     });
     expect(sizeChanges).toEqual([{ height: 68 }]);
+
+    await closeHarness(harness);
+  });
+
+  test("returns a private image chunk through an official component-originated tools/call", async () => {
+    const requests: unknown[] = [];
+    const harness = await createHarness({
+      capabilities: { serverTools: {} },
+      onCallTool(params) {
+        requests.push(params);
+        return Promise.resolve({
+          content: [],
+          structuredContent: imageChunkSummary,
+          _meta: { imageChunk: privateImageChunk },
+        });
+      },
+    });
+
+    const chunk = await harness.host.ports.documents.loadAssetChunk({
+      reviewSessionId: firstDocument.reviewSessionId,
+      revision: firstDocument.revision,
+      imageId: privateImageChunk.imageId,
+      chunkIndex: 0,
+    });
+
+    expect(chunk).toEqual(privateImageChunk);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toEqual(
+      expect.objectContaining({
+        name: "load_markdown_review_image_chunk",
+        arguments: {
+          reviewSessionId: firstDocument.reviewSessionId,
+          revision: firstDocument.revision,
+          imageId: privateImageChunk.imageId,
+          chunkIndex: 0,
+        },
+      }),
+    );
+    expect(JSON.stringify(imageChunkSummary)).not.toContain(privateImageData);
+
+    await closeHarness(harness);
+  });
+
+  test("preserves a component tool's server error reason", async () => {
+    const harness = await createHarness({
+      capabilities: { serverTools: {} },
+      onCallTool() {
+        return Promise.resolve({
+          isError: true,
+          content: [{ type: "text", text: "Fallback error text." }],
+          _meta: {
+            reviewError: {
+              code: "session_expired",
+              message: "Could not load image: review session expired.",
+            },
+          },
+        });
+      },
+    });
+
+    const error = await rejectionError(
+      harness.host.ports.documents.loadAssetChunk({
+        reviewSessionId: firstDocument.reviewSessionId,
+        revision: firstDocument.revision,
+        imageId: privateImageChunk.imageId,
+        chunkIndex: 0,
+      }),
+    );
+    expect(error).toBeInstanceOf(ReviewPortError);
+    if (!(error instanceof ReviewPortError)) throw error;
+    expect(error.code).toBe("server_error");
+    expect(error.serverCode).toBe("session_expired");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toContain("review session expired");
+
+    await closeHarness(harness);
+  });
+
+  test("keeps a generic image load failure retryable", async () => {
+    const harness = await createHarness({
+      capabilities: { serverTools: {} },
+      onCallTool() {
+        return Promise.resolve({
+          isError: true,
+          content: [{ type: "text", text: "The Markdown review image could not be loaded." }],
+          _meta: {
+            reviewError: {
+              code: "image_load_failed",
+              message: "The Markdown review image could not be loaded.",
+            },
+          },
+        });
+      },
+    });
+
+    const error = await rejectionError(
+      harness.host.ports.documents.loadAssetChunk({
+        reviewSessionId: firstDocument.reviewSessionId,
+        revision: firstDocument.revision,
+        imageId: privateImageChunk.imageId,
+        chunkIndex: 0,
+      }),
+    );
+    expect(error).toBeInstanceOf(ReviewPortError);
+    if (!(error instanceof ReviewPortError)) throw error;
+    expect(error.serverCode).toBe("image_load_failed");
+    expect(error.retryable).toBe(true);
+
+    await closeHarness(harness);
+  });
+
+  test("classifies missing private image metadata", async () => {
+    const harness = await createHarness({
+      capabilities: { serverTools: {} },
+      onCallTool() {
+        return Promise.resolve({ content: [], structuredContent: imageChunkSummary });
+      },
+    });
+
+    const error = await rejectionError(
+      harness.host.ports.documents.loadAssetChunk({
+        reviewSessionId: firstDocument.reviewSessionId,
+        revision: firstDocument.revision,
+        imageId: privateImageChunk.imageId,
+        chunkIndex: 0,
+      }),
+    );
+    expect(error).toBeInstanceOf(ReviewPortError);
+    if (!(error instanceof ReviewPortError)) throw error;
+    expect(error.code).toBe("private_metadata_missing");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toBe("The image chunk response did not include private metadata.");
+
+    await closeHarness(harness);
+  });
+
+  test("classifies invalid private image metadata", async () => {
+    const harness = await createHarness({
+      capabilities: { serverTools: {} },
+      onCallTool() {
+        return Promise.resolve({
+          content: [],
+          structuredContent: imageChunkSummary,
+          _meta: { imageChunk: { ...privateImageChunk, data: "not-base64" } },
+        });
+      },
+    });
+
+    const error = await rejectionError(
+      harness.host.ports.documents.loadAssetChunk({
+        reviewSessionId: firstDocument.reviewSessionId,
+        revision: firstDocument.revision,
+        imageId: privateImageChunk.imageId,
+        chunkIndex: 0,
+      }),
+    );
+    expect(error).toBeInstanceOf(ReviewPortError);
+    if (!(error instanceof ReviewPortError)) throw error;
+    expect(error.code).toBe("private_metadata_invalid");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toBe("The image chunk response contained invalid private metadata.");
 
     await closeHarness(harness);
   });

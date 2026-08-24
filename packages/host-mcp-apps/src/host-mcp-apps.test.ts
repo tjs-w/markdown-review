@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { PersistedReviewStateSchema, ReviewSubmissionSchema } from "@markdown-review/contracts";
 
 import { formatCodexSubmission } from "./format-codex-submission";
-import { findReviewDocument } from "./payloads";
+import {
+  findReviewDocument,
+  parsePrivateImageChunkToolResult,
+  parseReviewDocumentToolResult,
+} from "./payloads";
 import { createReviewStateStore } from "./state-store";
 
 const reviewDocument = {
@@ -19,6 +23,32 @@ const reviewDocument = {
   html: '<p class="review-block" data-start-line="1" data-end-line="2">Review</p>',
   images: [],
 };
+
+const reviewDocumentSummary = {
+  path: reviewDocument.path,
+  filename: reviewDocument.filename,
+  title: reviewDocument.title,
+  revision: reviewDocument.revision,
+  modifiedAt: reviewDocument.modifiedAt,
+  sizeBytes: reviewDocument.sizeBytes,
+  lineCount: reviewDocument.lineCount,
+  blockCount: reviewDocument.blockCount,
+};
+
+const chunkSummary = {
+  kind: "markdown-review-image-chunk" as const,
+  reviewSessionId: reviewDocument.reviewSessionId,
+  revision: reviewDocument.revision,
+  imageId: "image-1",
+  imageRevision: "def456",
+  mimeType: "image/png" as const,
+  chunkIndex: 0,
+  chunkCount: 1,
+  byteOffset: 0,
+  byteLength: 3,
+};
+
+const privateChunk = { ...chunkSummary, data: "YWJj" };
 
 function parseFencedEnvelope(message: string): {
   readonly fence: string;
@@ -94,16 +124,153 @@ describe("Codex submission adapter", () => {
 });
 
 describe("host payload validation", () => {
-  test("finds a valid private document in a standard tool result", () => {
+  test("finds a valid private document only at the standard metadata location", () => {
     expect(
-      findReviewDocument({ structuredContent: { _meta: { document: reviewDocument } } }),
+      findReviewDocument({
+        content: [],
+        structuredContent: reviewDocumentSummary,
+        _meta: { document: reviewDocument },
+      }),
     ).toEqual(reviewDocument);
+    expect(
+      findReviewDocument({
+        content: [],
+        structuredContent: { _meta: { document: reviewDocument } },
+      }),
+    ).toBeNull();
   });
 
   test("does not accept a document-shaped payload with an invalid session", () => {
     expect(
-      findReviewDocument({ _meta: { document: { ...reviewDocument, reviewSessionId: "forged" } } }),
+      findReviewDocument({
+        content: [],
+        structuredContent: reviewDocumentSummary,
+        _meta: { document: { ...reviewDocument, reviewSessionId: "forged" } },
+      }),
     ).toBeNull();
+  });
+
+  test("classifies standard document payload failures", () => {
+    expect(parseReviewDocumentToolResult({ content: [] })).toEqual({
+      success: false,
+      code: "private_metadata_missing",
+      message: "The document response did not include private metadata.",
+    });
+    expect(parseReviewDocumentToolResult({ content: [], _meta: { document: {} } })).toEqual({
+      success: false,
+      code: "private_metadata_invalid",
+      message: "The document response contained invalid private metadata.",
+    });
+    expect(
+      parseReviewDocumentToolResult({
+        content: [],
+        structuredContent: { ...reviewDocumentSummary, revision: "forged" },
+        _meta: { document: reviewDocument },
+      }),
+    ).toEqual({
+      success: false,
+      code: "summary_mismatch",
+      message: "The public document summary did not match the private metadata.",
+    });
+  });
+
+  test("accepts matching public and private image chunk fields", () => {
+    expect(
+      parsePrivateImageChunkToolResult({
+        content: [],
+        structuredContent: chunkSummary,
+        _meta: { imageChunk: privateChunk },
+      }),
+    ).toEqual({ success: true, data: privateChunk });
+  });
+
+  test("classifies missing, malformed, and mismatched chunk metadata", () => {
+    expect(
+      parsePrivateImageChunkToolResult({ content: [], structuredContent: chunkSummary }),
+    ).toEqual({
+      success: false,
+      code: "private_metadata_missing",
+      message: "The image chunk response did not include private metadata.",
+    });
+    expect(
+      parsePrivateImageChunkToolResult({
+        content: [],
+        structuredContent: chunkSummary,
+        _meta: { imageChunk: { ...privateChunk, data: "not base64!" } },
+      }),
+    ).toEqual({
+      success: false,
+      code: "private_metadata_invalid",
+      message: "The image chunk response contained invalid private metadata.",
+    });
+    expect(
+      parsePrivateImageChunkToolResult({
+        content: [],
+        structuredContent: { ...chunkSummary, byteLength: 2 },
+        _meta: { imageChunk: privateChunk },
+      }),
+    ).toEqual({
+      success: false,
+      code: "summary_mismatch",
+      message: "The public image chunk summary did not match the private metadata.",
+    });
+  });
+
+  test("never searches model-visible content for private image bytes", () => {
+    expect(
+      parsePrivateImageChunkToolResult({
+        content: [],
+        structuredContent: { ...chunkSummary, imageChunk: privateChunk },
+      }),
+    ).toEqual({
+      success: false,
+      code: "private_metadata_missing",
+      message: "The image chunk response did not include private metadata.",
+    });
+  });
+
+  test("surfaces bounded sanitized server errors before inspecting metadata", () => {
+    const result = parsePrivateImageChunkToolResult({
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `Could not load /Users/example/private.png\nfor ${reviewDocument.reviewSessionId} ${"a".repeat(64)}`,
+        },
+      ],
+      _meta: {
+        reviewError: {
+          message: `Session failed at /Users/example/private.png for ${reviewDocument.reviewSessionId}`,
+        },
+        imageChunk: privateChunk,
+      },
+    });
+    expect(result).toEqual({
+      success: false,
+      code: "server_error",
+      message: "Session failed at [redacted path] for [redacted]",
+    });
+    if (!result.success) expect(result.message.length).toBeLessThanOrEqual(320);
+  });
+
+  test("bounds untrusted server error input before sanitizing it", () => {
+    const result = parsePrivateImageChunkToolResult({
+      isError: true,
+      content: [{ type: "text", text: "x".repeat(100_000) }],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.code).toBe("server_error");
+      expect(result.message.length).toBeLessThanOrEqual(320);
+    }
+  });
+
+  test("rejects non-standard component tool responses", () => {
+    expect(parsePrivateImageChunkToolResult({ _meta: { imageChunk: privateChunk } })).toEqual({
+      success: false,
+      code: "host_contract_mismatch",
+      message: "The host returned an invalid component tool response.",
+    });
   });
 });
 

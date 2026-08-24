@@ -9,6 +9,43 @@ import type {
 export type DisplayMode = "inline" | "fullscreen" | "pip";
 export type ReviewTheme = "light" | "dark";
 
+export type ReviewPortErrorCode =
+  | "server_error"
+  | "private_metadata_missing"
+  | "private_metadata_invalid"
+  | "summary_mismatch"
+  | "host_contract_mismatch";
+
+export type ReviewServerErrorCode =
+  | "session_expired"
+  | "stale_revision"
+  | "image_not_found"
+  | "chunk_out_of_range"
+  | "image_load_failed";
+
+export class ReviewPortError extends Error {
+  readonly code: ReviewPortErrorCode;
+  readonly retryable: boolean;
+  readonly serverCode: ReviewServerErrorCode | undefined;
+
+  constructor(
+    code: ReviewPortErrorCode,
+    message: string,
+    retryable = false,
+    serverCode?: ReviewServerErrorCode,
+  ) {
+    super(message);
+    this.name = "ReviewPortError";
+    this.code = code;
+    this.retryable = retryable;
+    this.serverCode = serverCode;
+  }
+}
+
+export function shouldRetryPortError(error: unknown): boolean {
+  return !(error instanceof ReviewPortError) || error.retryable;
+}
+
 export interface DocumentRef {
   readonly reviewSessionId: string;
   readonly path: string;

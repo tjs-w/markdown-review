@@ -17,6 +17,7 @@ All notable changes to this project will be documented here.
 - Split contracts, pure review state, Node Markdown loading, reusable UI, MCP Apps hosting, and server composition into portable packages.
 - Added opaque expiring review sessions, immutable image snapshots, SHA-256 image revisions, bounded reads, and LRU cache limits.
 - Updated the component resource cache key to `ui://markdown-review/v17.html` and replaced the handwritten bridge with the official MCP Apps client.
+- Updated the component resource cache key to `ui://markdown-review/v18.html` and made private component-tool failures explicit, bounded, and safe to diagnose.
 - Fixed Submit in Codex by accepting the host's standard empty `message` capability object.
 - Moved the selection guidance and keyboard shortcut into an accessible header info tooltip.
 - Docked queued comments in a toggleable split-view rail that never overlays the document.

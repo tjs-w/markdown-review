@@ -9,6 +9,7 @@ import {
 } from "@markdown-review/contracts";
 
 import { mountMarkdownReview } from "./mount";
+import { ReviewPortError } from "./ports";
 import type { HostContext, HostContextListener, MarkdownReviewPorts } from "./ports";
 
 const SESSION = "123e4567-e89b-42d3-a456-426614174000";
@@ -639,6 +640,43 @@ describe("mountMarkdownReview", () => {
     document.querySelector<HTMLButtonElement>(".image-retry")?.click();
     await settle(5);
     expect(loads).toBe(2);
+    handle.destroy();
+  });
+
+  test("does not automatically retry a permanent image transport failure", async () => {
+    installShell();
+    let loads = 0;
+    const imageDocument: ReviewDocument = {
+      ...reviewDocument,
+      html: '<section class="review-block" data-start-line="1" data-end-line="1"><span class="local-image" data-local-image-id="local-image-1" data-alt="Diagram"><span class="local-image-status">Loading image…</span></span></section>',
+      images: [
+        {
+          id: "local-image-1",
+          mimeType: "image/png",
+          revision: "0".repeat(64),
+          modifiedAt: NOW,
+          byteLength: 3,
+          chunkCount: 1,
+          width: 1,
+          height: 1,
+        },
+      ],
+    };
+    const harness = createHarness({
+      loadAssetChunk() {
+        loads += 1;
+        return Promise.reject(
+          new ReviewPortError(
+            "server_error",
+            "The Markdown review session expired; reopen the review.",
+          ),
+        );
+      },
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: imageDocument });
+    await settle(5);
+    expect(loads).toBe(1);
+    expect(document.querySelector(".local-image-status")?.textContent).toContain("session expired");
     handle.destroy();
   });
 

@@ -39,6 +39,25 @@ const document: ReviewDocument = {
   images: [],
 };
 const opened: OpenedMarkdownReview = { summary, document };
+const chunkRequest = {
+  reviewSessionId,
+  revision: summary.revision,
+  imageId: "image-1",
+  chunkIndex: 0,
+};
+const chunkSummary = {
+  kind: "markdown-review-image-chunk" as const,
+  ...chunkRequest,
+  imageRevision: "image-revision",
+  mimeType: "image/png" as const,
+  chunkCount: 1,
+  byteOffset: 0,
+  byteLength: 3,
+};
+const loadedChunk: LoadedAssetChunk = {
+  summary: chunkSummary,
+  privateChunk: { ...chunkSummary, data: "YWJj" },
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -51,11 +70,13 @@ function toolVisibility(value: unknown): unknown {
 
 describe("createMarkdownReviewServer", () => {
   test("preserves the public summary and keeps session data app-private", async () => {
+    let documentLoadError: Error | undefined;
     const backend = {
       open(): Promise<OpenedMarkdownReview> {
         return Promise.resolve(opened);
       },
       loadDocument(): Promise<OpenedMarkdownReview> {
+        if (documentLoadError) return Promise.reject(documentLoadError);
         return Promise.resolve(opened);
       },
       loadAssetChunk(): LoadedAssetChunk {
@@ -98,6 +119,22 @@ describe("createMarkdownReviewServer", () => {
       expect(JSON.stringify(result.structuredContent)).not.toContain(reviewSessionId);
       expect(result._meta?.["document"]).toEqual(document);
 
+      documentLoadError = new Error("Sensitive document detail: /Users/example/private.md");
+      const failedRefresh = await client.callTool({
+        name: "load_markdown_review_document",
+        arguments: { reviewSessionId },
+      });
+      expect(failedRefresh.isError).toBeTrue();
+      expect(failedRefresh.content).toEqual([
+        { type: "text", text: "The Markdown review document could not be loaded." },
+      ]);
+      expect(failedRefresh._meta?.["document"]).toEqual({
+        kind: "markdown-review-document",
+        reviewSessionId,
+        error: "The Markdown review document could not be loaded.",
+      });
+      expect(JSON.stringify(failedRefresh)).not.toContain("/Users/example/private.md");
+
       const resource = await client.readResource({ uri: MARKDOWN_REVIEW_TEMPLATE_URI });
       const resourceContent = resource.contents[0];
       const html = resourceContent && "text" in resourceContent ? resourceContent.text : "";
@@ -106,6 +143,89 @@ describe("createMarkdownReviewServer", () => {
       expect(html).not.toContain("MARKDOWN_REVIEW_PNG_DECODER");
       expect(html).not.toContain("MARKDOWN_REVIEW_APP");
       expect(html).toContain("<\\/script");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  test("keeps image bytes private and returns stable safe image failure metadata", async () => {
+    let loadError: Error | undefined;
+    const backend = {
+      open(): Promise<OpenedMarkdownReview> {
+        return Promise.resolve(opened);
+      },
+      loadDocument(): Promise<OpenedMarkdownReview> {
+        return Promise.resolve(opened);
+      },
+      loadAssetChunk(): LoadedAssetChunk {
+        if (loadError) throw loadError;
+        return loadedChunk;
+      },
+    };
+    const server = createMarkdownReviewServer({
+      backend,
+      assetLoader: {
+        load() {
+          return Promise.resolve({
+            template:
+              "<html><!-- MARKDOWN_REVIEW_PNG_DECODER --><!-- MARKDOWN_REVIEW_APP --></html>",
+            pngDecoder: "window.decoder = true;",
+            reviewBundle: "window.review = true;",
+          });
+        },
+      },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "markdown-review-test", version: "0.1.0" });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    try {
+      const success = await client.callTool({
+        name: "load_markdown_review_image_chunk",
+        arguments: chunkRequest,
+      });
+      expect(success.structuredContent).toEqual(chunkSummary);
+      expect(JSON.stringify(success.structuredContent)).not.toContain(
+        loadedChunk.privateChunk.data,
+      );
+      expect(success._meta?.["imageChunk"]).toEqual(loadedChunk.privateChunk);
+
+      loadError = new Error(
+        "The Markdown review session is unavailable or expired; reopen the review.",
+      );
+      const expired = await client.callTool({
+        name: "load_markdown_review_image_chunk",
+        arguments: chunkRequest,
+      });
+      expect(expired.isError).toBeTrue();
+      expect(expired.content).toEqual([
+        {
+          type: "text",
+          text: "The Markdown review session is unavailable or expired; reopen the review.",
+        },
+      ]);
+      expect(expired._meta?.["reviewError"]).toEqual({
+        code: "session_expired",
+        message: "The Markdown review session is unavailable or expired; reopen the review.",
+      });
+
+      loadError = new Error(`Sensitive backend detail: ${summary.path} ${reviewSessionId}`);
+      const unknown = await client.callTool({
+        name: "load_markdown_review_image_chunk",
+        arguments: chunkRequest,
+      });
+      expect(unknown.isError).toBeTrue();
+      expect(unknown.content).toEqual([
+        { type: "text", text: "The Markdown review image could not be loaded." },
+      ]);
+      expect(unknown._meta?.["reviewError"]).toEqual({
+        code: "image_load_failed",
+        message: "The Markdown review image could not be loaded.",
+      });
+      expect(JSON.stringify(unknown)).not.toContain(summary.path);
+      expect(JSON.stringify(unknown)).not.toContain(reviewSessionId);
     } finally {
       await client.close();
       await server.close();

@@ -19,7 +19,7 @@ import { z } from "zod";
 
 import type { ReviewUiAssetLoader } from "./assets.js";
 
-export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v17.html";
+export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v18.html";
 const PNG_DECODER_MARKER = "<!-- MARKDOWN_REVIEW_PNG_DECODER -->";
 const REVIEW_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
 
@@ -40,6 +40,45 @@ export interface CreateMarkdownReviewServerOptions {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+type ImageLoadErrorCode =
+  | "session_expired"
+  | "stale_revision"
+  | "image_not_found"
+  | "chunk_out_of_range"
+  | "image_load_failed";
+
+interface ImageLoadError {
+  readonly code: ImageLoadErrorCode;
+  readonly message: string;
+}
+
+function classifyImageLoadError(error: unknown): ImageLoadError {
+  const message = errorMessage(error);
+  if (message === "The Markdown review session is unavailable or expired; reopen the review.") {
+    return { code: "session_expired", message };
+  }
+  if (message === "The Markdown changed; refresh the review before loading its images.") {
+    return { code: "stale_revision", message };
+  }
+  if (message === "The requested image is not part of this Markdown review session.") {
+    return { code: "image_not_found", message };
+  }
+  if (message === "The requested image chunk is out of range.") {
+    return { code: "chunk_out_of_range", message };
+  }
+  return {
+    code: "image_load_failed",
+    message: "The Markdown review image could not be loaded.",
+  };
+}
+
+function safeDocumentLoadError(error: unknown): string {
+  const message = errorMessage(error);
+  return message === "The Markdown review session is unavailable or expired; reopen the review."
+    ? message
+    : "The Markdown review document could not be loaded.";
 }
 
 export function createMarkdownReviewServer(options: CreateMarkdownReviewServerOptions): McpServer {
@@ -185,12 +224,10 @@ export function createMarkdownReviewServer(options: CreateMarkdownReviewServerOp
           _meta: { document: loaded.document },
         };
       } catch (error: unknown) {
-        const message = errorMessage(error);
+        const message = safeDocumentLoadError(error);
         return {
           isError: true,
-          content: [
-            { type: "text" as const, text: `Could not load Markdown review document: ${message}` },
-          ],
+          content: [{ type: "text" as const, text: message }],
           _meta: {
             document: ErrorReviewDocumentSchema.parse({
               kind: "markdown-review-document",
@@ -233,14 +270,11 @@ export function createMarkdownReviewServer(options: CreateMarkdownReviewServerOp
           _meta: { imageChunk: chunk.privateChunk },
         };
       } catch (error: unknown) {
+        const reviewError = classifyImageLoadError(error);
         return {
           isError: true,
-          content: [
-            {
-              type: "text" as const,
-              text: `Could not load Markdown review image: ${errorMessage(error)}`,
-            },
-          ],
+          content: [{ type: "text" as const, text: reviewError.message }],
+          _meta: { reviewError },
         };
       }
     },

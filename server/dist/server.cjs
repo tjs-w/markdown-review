@@ -53040,12 +53040,35 @@ var EMPTY_COMPLETION_RESULT = {
 };
 
 // packages/mcp-server/src/server.ts
-var MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v17.html";
+var MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v18.html";
 var PNG_DECODER_MARKER = "<!-- MARKDOWN_REVIEW_PNG_DECODER -->";
 var REVIEW_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
 var SERVER_INSTRUCTIONS = "Use open_markdown_review only to render an absolute .md or .markdown path. The Markdown file is canonical. Review comments have stable #N serials within one queued review round and may reference earlier queued comments by serial; treat #N as a reference only when the feedback payload explicitly lists it as one, because literal #N text is supported. The component submits the full queue as one batch, clears it after a successful submission, and restarts numbering at #1. Discuss question-only items without editing, apply explicit change requests with normal filesystem tools, then reopen the review after any edits.";
 function errorMessage(error51) {
   return error51 instanceof Error ? error51.message : String(error51);
+}
+function classifyImageLoadError(error51) {
+  const message = errorMessage(error51);
+  if (message === "The Markdown review session is unavailable or expired; reopen the review.") {
+    return { code: "session_expired", message };
+  }
+  if (message === "The Markdown changed; refresh the review before loading its images.") {
+    return { code: "stale_revision", message };
+  }
+  if (message === "The requested image is not part of this Markdown review session.") {
+    return { code: "image_not_found", message };
+  }
+  if (message === "The requested image chunk is out of range.") {
+    return { code: "chunk_out_of_range", message };
+  }
+  return {
+    code: "image_load_failed",
+    message: "The Markdown review image could not be loaded."
+  };
+}
+function safeDocumentLoadError(error51) {
+  const message = errorMessage(error51);
+  return message === "The Markdown review session is unavailable or expired; reopen the review." ? message : "The Markdown review document could not be loaded.";
 }
 function createMarkdownReviewServer(options) {
   const backend = options.backend ?? new MarkdownReviewService();
@@ -53184,12 +53207,10 @@ function createMarkdownReviewServer(options) {
           _meta: { document: loaded.document }
         };
       } catch (error51) {
-        const message = errorMessage(error51);
+        const message = safeDocumentLoadError(error51);
         return {
           isError: true,
-          content: [
-            { type: "text", text: `Could not load Markdown review document: ${message}` }
-          ],
+          content: [{ type: "text", text: message }],
           _meta: {
             document: ErrorReviewDocumentSchema.parse({
               kind: "markdown-review-document",
@@ -53230,14 +53251,11 @@ function createMarkdownReviewServer(options) {
           _meta: { imageChunk: chunk.privateChunk }
         };
       } catch (error51) {
+        const reviewError = classifyImageLoadError(error51);
         return {
           isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Could not load Markdown review image: ${errorMessage(error51)}`
-            }
-          ]
+          content: [{ type: "text", text: reviewError.message }],
+          _meta: { reviewError }
         };
       }
     }

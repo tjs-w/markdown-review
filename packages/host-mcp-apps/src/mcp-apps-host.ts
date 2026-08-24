@@ -17,8 +17,14 @@ import type {
   HostContextListener,
   MarkdownReviewPorts,
 } from "@markdown-review/review-ui";
+import { ReviewPortError } from "@markdown-review/review-ui";
 
-import { findPrivateImageChunk, findReviewDocument } from "./payloads";
+import {
+  findReviewDocument,
+  parsePrivateImageChunkToolResult,
+  parseReviewDocumentToolResult,
+  type ToolPayloadResult,
+} from "./payloads";
 import { createReviewStateStore } from "./state-store";
 
 export interface McpAppsHostOptions {
@@ -70,6 +76,25 @@ function normalizeHostCapabilities(value: unknown): {
 
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function unwrapToolPayload<T>(result: ToolPayloadResult<T>): T {
+  if (result.success) return result.data;
+  const retryable = result.code === "server_error" && result.serverCode === "image_load_failed";
+  throw new ReviewPortError(result.code, result.message, retryable, result.serverCode);
+}
+
+async function callComponentTool<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error: unknown) {
+    if (error instanceof ReviewPortError) throw error;
+    throw new ReviewPortError(
+      "host_contract_mismatch",
+      "The component tool request could not be completed.",
+      true,
+    );
+  }
 }
 
 export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
@@ -164,25 +189,28 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
     documents: {
       async refresh(reviewSessionId) {
         if (!serverTools) throw new Error("This MCP Apps host does not allow component tools");
-        const result = await app.callServerTool({
-          name: "load_markdown_review_document",
-          arguments: { reviewSessionId },
+        return callComponentTool(async () => {
+          const result = await app.callServerTool({
+            name: "load_markdown_review_document",
+            arguments: { reviewSessionId },
+          });
+          return ReviewDocumentSchema.parse(
+            unwrapToolPayload(parseReviewDocumentToolResult(result)),
+          );
         });
-        const reviewDocument = findReviewDocument(result);
-        if (!reviewDocument)
-          throw new Error("The document payload was not returned to the component");
-        return ReviewDocumentSchema.parse(reviewDocument);
       },
       async loadAssetChunk(request) {
         if (!serverTools) throw new Error("This MCP Apps host does not allow component tools");
         const validatedRequest = ReviewImageChunkRequestSchema.parse(request);
-        const result = await app.callServerTool({
-          name: "load_markdown_review_image_chunk",
-          arguments: validatedRequest,
+        return callComponentTool(async () => {
+          const result = await app.callServerTool({
+            name: "load_markdown_review_image_chunk",
+            arguments: validatedRequest,
+          });
+          return PrivateReviewImageChunkSchema.parse(
+            unwrapToolPayload(parsePrivateImageChunkToolResult(result)),
+          );
         });
-        const chunk = findPrivateImageChunk(result);
-        if (!chunk) throw new Error("The image chunk payload was not returned to the component");
-        return PrivateReviewImageChunkSchema.parse(chunk);
       },
     },
     submissions: {
