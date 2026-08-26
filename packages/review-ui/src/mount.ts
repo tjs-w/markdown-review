@@ -31,7 +31,7 @@ import type {
   ReviewTheme,
 } from "./ports";
 import { assembleImageChunks } from "./image-assembly";
-import { shouldRetryPortError } from "./ports";
+import { ReviewPortError, shouldRetryPortError } from "./ports";
 import {
   captureReviewTextAnchor,
   clearReviewHighlights,
@@ -52,9 +52,27 @@ type SelectionDirection = "forward" | "backward";
 interface ContextMenuSnapshot {
   readonly selection: ActiveSelection | null;
   readonly copyText: string | null;
+  readonly range?: Range | null;
+  readonly direction?: SelectionDirection;
 }
 
 interface ActiveLoad {
+  readonly reviewSessionId: string;
+  readonly generation: number;
+  readonly promise: Promise<boolean>;
+}
+
+interface ComposerDraftSnapshot {
+  readonly path: string;
+  readonly selection: ReviewSelection;
+  readonly feedback: string;
+  readonly editingId: string | null;
+  readonly sourceRevision: string;
+  readonly selectionStart: number;
+  readonly selectionEnd: number;
+}
+
+interface ActiveRecovery {
   readonly reviewSessionId: string;
   readonly generation: number;
   readonly promise: Promise<boolean>;
@@ -68,6 +86,10 @@ interface RasterCandidate {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isExpiredSessionError(error: unknown): boolean {
+  return error instanceof ReviewPortError && error.serverCode === "session_expired";
 }
 
 function clamp(value: number, fallback: number): number {
@@ -285,19 +307,26 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   #secondarySelection: ContextMenuSnapshot | null = null;
   #contextSelection: ActiveSelection | null = null;
   #contextCopyText: string | null = null;
+  #contextRange: Range | null = null;
+  #contextSelectionDirection: SelectionDirection = "forward";
   #contextImageTarget: HTMLButtonElement | null = null;
   #contextMenuReturnFocus: HTMLElement | null = null;
   #selection: ActiveSelection | null = null;
   #editingId: string | null = null;
+  #selectionRevision: string | null = null;
   #generation = 0;
   #renderKey: string | null = null;
   #activeLoad: ActiveLoad | null = null;
+  #activeRecovery: ActiveRecovery | null = null;
   #decodedImages = new Map<string, Promise<DecodedReviewImage>>();
   #fullscreenRequestedFor: string | null = null;
   #inlineReviewFallback = false;
   #sendingIds = new Set<string>();
   #returnFocus: HTMLElement | null = null;
   #lastSelectionAnnouncement: string | null = null;
+  #copyOperation = 0;
+  #manualCopyDialog: HTMLElement | null = null;
+  #manualCopyReturnFocus: HTMLElement | null = null;
   #toastTimer: ReturnType<typeof setTimeout> | undefined;
   #saveChain: Promise<void> = Promise.resolve();
   #documentBusy = false;
@@ -343,11 +372,13 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#unsubscribePresentation();
     clearReviewHighlights(this.#element("document"));
     this.#closeContextMenu(false);
+    this.#element("document").querySelector("[data-review-ui='session-recovery']")?.remove();
     if (this.#selectionFrame !== undefined) {
       this.#view.cancelAnimationFrame(this.#selectionFrame);
       this.#selectionFrame = undefined;
     }
     if (this.#toastTimer !== undefined) clearTimeout(this.#toastTimer);
+    this.#closeManualCopy(false);
   }
 
   showError(error: unknown, retry?: () => void): void {
@@ -466,6 +497,75 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       }
       surface.replaceChildren(empty);
     }
+  }
+
+  #closeManualCopy(restoreFocus = true): void {
+    const dialog = this.#manualCopyDialog;
+    const returnFocus = this.#manualCopyReturnFocus;
+    this.#manualCopyDialog = null;
+    this.#manualCopyReturnFocus = null;
+    const field = dialog?.querySelector<HTMLTextAreaElement>("textarea");
+    if (field) field.value = "";
+    dialog?.remove();
+    if (restoreFocus && returnFocus?.isConnected && !returnFocus.hidden) {
+      returnFocus.focus({ preventScroll: true });
+    }
+  }
+
+  #openManualCopy(text: string, returnFocus: HTMLElement | null): void {
+    this.#closeManualCopy(false);
+    const dialog = this.#root.createElement("section");
+    dialog.className = "manual-copy-dialog";
+    dialog.dataset["reviewUi"] = "manual-copy";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-labelledby", "manual-copy-title");
+    dialog.setAttribute("aria-describedby", "manual-copy-instructions");
+
+    const panel = this.#root.createElement("div");
+    panel.className = "manual-copy-panel";
+    const title = this.#root.createElement("h2");
+    title.id = "manual-copy-title";
+    title.textContent = "Copy selected text";
+    const instructions = this.#root.createElement("p");
+    instructions.id = "manual-copy-instructions";
+    instructions.textContent =
+      "Clipboard permission is blocked. Press Command+C or Control+C to copy the selected text.";
+    const field = this.#root.createElement("textarea");
+    field.className = "manual-copy-field";
+    field.readOnly = true;
+    field.setAttribute("aria-label", "Selected Markdown text");
+    field.value = text;
+    const close = this.#root.createElement("button");
+    close.type = "button";
+    close.className = "button";
+    close.textContent = "Close";
+    close.addEventListener("click", () => {
+      this.#closeManualCopy();
+    });
+    panel.append(title, instructions, field, close);
+    dialog.appendChild(panel);
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.#closeManualCopy();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const controls: HTMLElement[] = [field, close];
+      const current = controls.indexOf(this.#root.activeElement as HTMLElement);
+      const next = event.shiftKey
+        ? (current - 1 + controls.length) % controls.length
+        : (current + 1) % controls.length;
+      event.preventDefault();
+      controls[next]?.focus();
+    });
+    this.#manualCopyDialog = dialog;
+    this.#manualCopyReturnFocus = returnFocus;
+    this.#root.body.appendChild(dialog);
+    field.focus();
+    field.setSelectionRange(0, field.value.length);
   }
 
   #applyTheme(theme: ReviewTheme): void {
@@ -923,6 +1023,121 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#element("selection-action").hidden = true;
   }
 
+  #dismissPendingSelection(): void {
+    this.#copyOperation += 1;
+    this.#clearPendingSelection();
+    this.#secondarySelection = null;
+    this.#lastSelectionAnnouncement = null;
+    this.#view.getSelection?.()?.removeAllRanges();
+    this.#element("selection-status").textContent = "Selection cleared.";
+  }
+
+  #restoreNativeSelection(range: Range | null, direction: SelectionDirection): void {
+    const nativeSelection = this.#view.getSelection?.();
+    if (
+      !range ||
+      !nativeSelection ||
+      !range.startContainer.isConnected ||
+      !range.endContainer.isConnected
+    ) {
+      return;
+    }
+    try {
+      nativeSelection.removeAllRanges();
+      if (typeof nativeSelection.setBaseAndExtent === "function") {
+        if (direction === "backward") {
+          nativeSelection.setBaseAndExtent(
+            range.endContainer,
+            range.endOffset,
+            range.startContainer,
+            range.startOffset,
+          );
+        } else {
+          nativeSelection.setBaseAndExtent(
+            range.startContainer,
+            range.startOffset,
+            range.endContainer,
+            range.endOffset,
+          );
+        }
+      } else {
+        nativeSelection.addRange(range.cloneRange());
+      }
+    } catch {
+      // The document changed or the saved range detached while clipboard work was pending.
+    }
+  }
+
+  #rangeIntersectsTarget(range: Range, target: Node): boolean {
+    try {
+      return range.intersectsNode(target);
+    } catch {
+      return false;
+    }
+  }
+
+  #targetIsReviewUi(target: Node): boolean {
+    const element =
+      target instanceof this.#view.Element
+        ? target
+        : target.parentElement instanceof this.#view.Element
+          ? target.parentElement
+          : null;
+    return Boolean(element?.closest("[data-review-ui], .local-image"));
+  }
+
+  #selectionSnapshotForTarget(target: Node): ContextMenuSnapshot {
+    if (
+      !this.#targetIsReviewUi(target) &&
+      this.#pendingSelection &&
+      this.#selectionCopyText &&
+      this.#selectionRange &&
+      this.#rangeIntersectsTarget(this.#selectionRange, target)
+    ) {
+      return {
+        selection: this.#pendingSelection,
+        copyText: this.#selectionCopyText,
+        range: this.#selectionRange.cloneRange(),
+        direction: this.#selectionDirection,
+      };
+    }
+    return { selection: null, copyText: null };
+  }
+
+  #selectionSnapshotAtPointer(event: PointerEvent | MouseEvent): ContextMenuSnapshot {
+    if (
+      !(event.target instanceof this.#view.Node) ||
+      this.#targetIsReviewUi(event.target) ||
+      !this.#pendingSelection ||
+      !this.#selectionCopyText ||
+      !this.#selectionRange
+    ) {
+      return { selection: null, copyText: null };
+    }
+    const rects = Array.from(this.#selectionRange.getClientRects()).filter(
+      (rect) => rect.width > 0 && rect.height > 0,
+    );
+    if (rects.length > 0) {
+      const tolerance = 2;
+      const inside = rects.some(
+        (rect) =>
+          event.clientX >= rect.left - tolerance &&
+          event.clientX <= rect.right + tolerance &&
+          event.clientY >= rect.top - tolerance &&
+          event.clientY <= rect.bottom + tolerance,
+      );
+      return inside
+        ? {
+            selection: this.#pendingSelection,
+            copyText: this.#selectionCopyText,
+            range: this.#selectionRange.cloneRange(),
+            direction: this.#selectionDirection,
+          }
+        : { selection: null, copyText: null };
+    }
+    return this.#selectionSnapshotForTarget(event.target);
+  }
+
   #nativeSelectionDirection(nativeSelection: Selection, range: Range): SelectionDirection {
     if (
       nativeSelection.focusNode === range.startContainer &&
@@ -1157,6 +1372,8 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#element("review-actions").setAttribute("aria-expanded", "false");
     this.#contextSelection = null;
     this.#contextCopyText = null;
+    this.#contextRange = null;
+    this.#contextSelectionDirection = "forward";
     this.#contextImageTarget = null;
     const returnFocus = this.#contextMenuReturnFocus;
     this.#contextMenuReturnFocus = null;
@@ -1170,6 +1387,8 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     readonly y: number;
     readonly selection?: ActiveSelection | null;
     readonly copyText?: string | null;
+    readonly range?: Range | null;
+    readonly direction?: SelectionDirection;
     readonly imageTarget?: HTMLButtonElement | null;
     readonly invoker?: HTMLElement | null;
   }): void {
@@ -1177,6 +1396,8 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#closeContextMenu(false);
     this.#contextSelection = options.selection ?? null;
     this.#contextCopyText = options.copyText ?? null;
+    this.#contextRange = options.range?.cloneRange() ?? null;
+    this.#contextSelectionDirection = options.direction ?? "forward";
     this.#contextImageTarget = options.imageTarget ?? null;
     this.#contextMenuReturnFocus =
       options.invoker ??
@@ -1238,6 +1459,12 @@ class MarkdownReviewController implements MarkdownReviewHandle {
 
   async #copyContextSelection(): Promise<void> {
     const text = this.#contextCopyText;
+    const returnFocus = this.#contextMenuReturnFocus;
+    const range = this.#contextRange?.cloneRange() ?? null;
+    const direction = this.#contextSelectionDirection;
+    const generation = this.#generation;
+    const renderKey = this.#renderKey;
+    const operation = ++this.#copyOperation;
     this.#closeContextMenu();
     if (!text) return;
     if (new TextEncoder().encode(text).byteLength > MAX_CLIPBOARD_TEXT_LENGTH) {
@@ -1247,9 +1474,34 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     try {
       if (!this.#ports.clipboard) throw new Error("Clipboard unavailable");
       await this.#ports.clipboard.writeText(text);
+      if (
+        this.#destroyed ||
+        operation !== this.#copyOperation ||
+        generation !== this.#generation ||
+        renderKey !== this.#renderKey
+      )
+        return;
+      this.#restoreNativeSelection(range, direction);
+      this.#view.requestAnimationFrame(() => {
+        if (
+          !this.#destroyed &&
+          operation === this.#copyOperation &&
+          generation === this.#generation &&
+          renderKey === this.#renderKey
+        ) {
+          this.#restoreNativeSelection(range, direction);
+        }
+      });
       this.#toast("Selected text copied.");
     } catch {
-      this.#toast("Could not copy the selected text. Check clipboard permission and try again.");
+      if (
+        this.#destroyed ||
+        operation !== this.#copyOperation ||
+        generation !== this.#generation ||
+        renderKey !== this.#renderKey
+      )
+        return;
+      this.#openManualCopy(text, returnFocus);
     }
   }
 
@@ -1367,12 +1619,84 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#renderCommentsPanel();
   }
 
+  #captureComposerDraft(): ComposerDraftSnapshot | null {
+    if (this.#element("review-composer").hidden || !this.#selection || !this.#document) return null;
+    const field = this.#element<HTMLTextAreaElement>("feedback");
+    return {
+      path: this.#document.path,
+      selection: this.#plainSelection(this.#selection),
+      feedback: field.value,
+      editingId: this.#editingId,
+      sourceRevision: this.#selectionRevision ?? this.#document.revision,
+      selectionStart: field.selectionStart,
+      selectionEnd: field.selectionEnd,
+    };
+  }
+
+  #resolveDraftSelection(
+    draft: ComposerDraftSnapshot,
+    reviewDocument: ReviewDocument,
+  ): { readonly selection: ActiveSelection; readonly sourceMissing: boolean } {
+    const surface = this.#element("document");
+    if (draft.selection.scope === "document") {
+      return { selection: { ...draft.selection, block: surface }, sourceMissing: false };
+    }
+    if (draft.selection.imageId) {
+      const imageTarget = this.#findImageTarget(
+        draft.selection,
+        null,
+        draft.sourceRevision !== reviewDocument.revision,
+      );
+      const placeholder = [...surface.querySelectorAll<HTMLElement>("[data-local-image-id]")].find(
+        (candidate) => candidate.dataset["localImageId"] === draft.selection.imageId,
+      );
+      const block =
+        imageTarget?.closest<HTMLElement>(".review-block") ??
+        placeholder?.closest<HTMLElement>(".review-block") ??
+        null;
+      return {
+        selection: { ...draft.selection, block: block ?? surface },
+        sourceMissing: !block,
+      };
+    }
+    const block = findReviewHighlightBlock(surface, {
+      id: "composer-draft",
+      serial: 0,
+      ...draft.selection,
+      stale: draft.sourceRevision !== reviewDocument.revision,
+    });
+    return {
+      selection: { ...draft.selection, block: block ?? surface },
+      sourceMissing: !block,
+    };
+  }
+
+  #restoreComposerDraft(draft: ComposerDraftSnapshot, reviewDocument: ReviewDocument): void {
+    if (draft.path !== reviewDocument.path) return;
+    const resolved = this.#resolveDraftSelection(draft, reviewDocument);
+    this.#openComposer(resolved.selection, {
+      editingId: draft.editingId,
+      feedback: draft.feedback,
+      revision: draft.sourceRevision,
+      sourceChanged: draft.sourceRevision !== reviewDocument.revision,
+      sourceMissing: resolved.sourceMissing,
+    });
+    const field = this.#element<HTMLTextAreaElement>("feedback");
+    field.setSelectionRange(
+      Math.min(draft.selectionStart, field.value.length),
+      Math.min(draft.selectionEnd, field.value.length),
+    );
+  }
+
   #openComposer(
     selection: ActiveSelection | null,
     options: {
       readonly editingId?: string | null;
       readonly feedback?: string;
       readonly invoker?: HTMLElement | null;
+      readonly revision?: string;
+      readonly sourceChanged?: boolean;
+      readonly sourceMissing?: boolean;
     } = {},
   ): void {
     if (!selection?.block) return;
@@ -1383,7 +1707,9 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#root.querySelectorAll(".image-review-target.is-selected").forEach((element) => {
       element.classList.remove("is-selected");
     });
-    if (selection.scope !== "document") selection.block.classList.add("is-selected");
+    if (selection.scope !== "document" && selection.block.matches(".review-block")) {
+      selection.block.classList.add("is-selected");
+    }
     this.#selection = {
       startLine: selection.startLine,
       endLine: selection.endLine,
@@ -1397,6 +1723,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     };
     this.#findImageTarget(this.#selection, selection.block)?.classList.add("is-selected");
     this.#editingId = options.editingId ?? null;
+    this.#selectionRevision = options.revision ?? this.#document?.revision ?? null;
     this.#returnFocus =
       options.invoker && options.invoker !== this.#element("selection-action")
         ? options.invoker
@@ -1406,6 +1733,24 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       : "Add feedback";
     this.#element("line-pill").textContent = lineLabel(this.#selection);
     const quote = this.#element("quote");
+    this.#element("review-composer").querySelector(".composer-source-warning")?.remove();
+    const descriptionIds = ["line-pill", "quote", "feedback-message"];
+    if (options.sourceChanged || options.sourceMissing) {
+      const warning = this.#root.createElement("div");
+      warning.className = "composer-source-warning";
+      warning.id = "composer-source-warning";
+      warning.setAttribute("role", "status");
+      warning.textContent = options.sourceMissing
+        ? "Source changed and this passage could not be relocated. This draft remains attached to its original revision."
+        : "Source changed while this draft was open. Queueing it will mark the comment as stale.";
+      quote.insertAdjacentElement("beforebegin", warning);
+      descriptionIds.push(warning.id);
+    }
+    this.#element("review-composer").setAttribute("aria-describedby", descriptionIds.join(" "));
+    this.#element<HTMLTextAreaElement>("feedback").setAttribute(
+      "aria-describedby",
+      descriptionIds.join(" "),
+    );
     quote.hidden = this.#selection.scope === "document";
     quote.textContent = this.#selection.quote || "Markdown passage";
     this.#element<HTMLTextAreaElement>("feedback").value = options.feedback ?? "";
@@ -1414,7 +1759,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       "aria-label",
       this.#editingId ? "Save feedback" : "Queue feedback",
     );
-    if (selection.scope === "document") {
+    if (selection.scope === "document" || selection.block === this.#element("document")) {
       selection.block.prepend(this.#element("review-composer"));
     } else {
       selection.block.insertAdjacentElement("afterend", this.#element("review-composer"));
@@ -1439,6 +1784,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#element("quote").hidden = false;
     this.#element<HTMLTextAreaElement>("feedback").value = "";
     this.#editingId = null;
+    this.#selectionRevision = null;
     this.#selection = null;
     this.#returnFocus = null;
     this.#root.querySelectorAll(".review-block.is-selected").forEach((element) => {
@@ -1447,6 +1793,15 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#root.querySelectorAll(".image-review-target.is-selected").forEach((element) => {
       element.classList.remove("is-selected");
     });
+    this.#element("review-composer").querySelector(".composer-source-warning")?.remove();
+    this.#element("review-composer").setAttribute(
+      "aria-describedby",
+      "line-pill quote feedback-message",
+    );
+    this.#element<HTMLTextAreaElement>("feedback").setAttribute(
+      "aria-describedby",
+      "line-pill quote feedback-message",
+    );
     this.#updateComposerActions();
     this.#updateQueueUi();
     if (!restoreSelection) this.#view.getSelection?.()?.removeAllRanges();
@@ -1461,16 +1816,13 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   }
 
   #requestCloseComposer(): void {
-    const feedback = this.#element<HTMLTextAreaElement>("feedback").value;
-    const selection = this.#selection;
-    const editingId = this.#editingId;
-    const invoker = this.#returnFocus;
+    const draft = this.#captureComposerDraft();
     this.#closeComposer();
-    if (!feedback.trim() || !selection) return;
+    if (!draft?.feedback.trim()) return;
     this.#toast("Draft discarded.", {
       actionLabel: "Undo",
       onAction: () => {
-        this.#openComposer(selection, { editingId, feedback, invoker });
+        if (this.#document) this.#restoreComposerDraft(draft, this.#document);
       },
     });
   }
@@ -1498,7 +1850,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       this.#round = queueFeedback(this.#round, {
         id,
         path: this.#document.path,
-        revision: this.#document.revision,
+        revision: this.#selectionRevision ?? this.#document.revision,
         selection: this.#plainSelection(selection),
         feedback,
         createdAt: new Date().toISOString(),
@@ -1856,10 +2208,15 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       context.putImageData(pixels, 0, 0);
       target.appendChild(canvas);
       placeholder.replaceWith(target);
+      if (this.#selection) {
+        this.#findImageTarget(this.#selection, this.#selection.block)?.classList.add("is-selected");
+      }
       this.#syncImageTargetStates();
     } catch (error) {
       if (this.#destroyed) return;
-      if (generation === this.#generation && !errorMessage(error).includes("superseded")) {
+      if (generation === this.#generation && isExpiredSessionError(error)) {
+        void this.#recoverExpiredSession();
+      } else if (generation === this.#generation && !errorMessage(error).includes("superseded")) {
         this.#setImageError(placeholder, image, alt, error);
       } else {
         placeholder.dataset["loading"] = "";
@@ -1925,6 +2282,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     let next = 0;
     const worker = async (): Promise<void> => {
       while (next < queue.length) {
+        if (generation !== this.#generation || this.#destroyed) return;
         const placeholder = queue[next];
         next += 1;
         if (placeholder) {
@@ -1998,6 +2356,8 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       this.#requestDefaultFullscreen(reviewDocument);
       return;
     }
+    const draft = this.#captureComposerDraft();
+    this.#closeManualCopy(false);
     this.#generation = Math.max(this.#generation, generation);
     this.#decodedImages.clear();
     this.#document = reviewDocument;
@@ -2031,8 +2391,93 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       );
     }
     this.#renderQueueCards();
+    if (draft) this.#restoreComposerDraft(draft, reviewDocument);
     void this.#installLocalImages(reviewDocument, this.#generation);
     this.#requestDefaultFullscreen(reviewDocument);
+  }
+
+  #showSessionRecoveryError(): void {
+    const surface = this.#element("document");
+    surface.querySelector("[data-review-ui='session-recovery']")?.remove();
+    const alert = this.#root.createElement("section");
+    alert.className = "session-recovery-alert";
+    alert.dataset["reviewUi"] = "session-recovery";
+    alert.setAttribute("role", "alert");
+    const message = this.#root.createElement("p");
+    message.textContent = this.#ports.documents.recover
+      ? "The review session expired and could not be restored. Retry recovery or reopen the review from Codex."
+      : "The review session expired. Reopen the review from Codex to render its images.";
+    alert.appendChild(message);
+    if (this.#ports.documents.recover) {
+      const retry = this.#root.createElement("button");
+      retry.type = "button";
+      retry.className = "button";
+      retry.textContent = "Retry recovery";
+      retry.addEventListener(
+        "click",
+        () => {
+          void this.#recoverExpiredSession();
+        },
+        { signal: this.#abort.signal },
+      );
+      alert.appendChild(retry);
+    }
+    surface.prepend(alert);
+    this.#setMeta("The review session expired. Reopen the review if recovery keeps failing.", true);
+  }
+
+  async #recoverExpiredSession(): Promise<boolean> {
+    const reviewDocument = this.#document;
+    if (!reviewDocument || this.#destroyed) return false;
+    if (
+      this.#activeRecovery?.reviewSessionId === reviewDocument.reviewSessionId &&
+      this.#activeRecovery.generation === this.#generation
+    ) {
+      return this.#activeRecovery.promise;
+    }
+    const generation = ++this.#generation;
+    this.#activeLoad = null;
+    this.#decodedImages.clear();
+    this.#element("document").querySelector("[data-review-ui='session-recovery']")?.remove();
+    const recover = this.#ports.documents.recover?.bind(this.#ports.documents);
+    if (!recover) {
+      this.#showSessionRecoveryError();
+      return false;
+    }
+    this.#setBusy(true);
+    this.#setMeta(`Restoring ${reviewDocument.filename}…`);
+    const promise = Promise.resolve().then(async (): Promise<boolean> => {
+      try {
+        const recovered = await recover({
+          reviewSessionId: reviewDocument.reviewSessionId,
+          path: reviewDocument.path,
+          revision: reviewDocument.revision,
+        });
+        if (generation !== this.#generation || this.#destroyed) return false;
+        if (recovered.path !== reviewDocument.path) {
+          throw new Error("The recovered review did not match the open Markdown file");
+        }
+        if (recovered.reviewSessionId === reviewDocument.reviewSessionId) {
+          throw new Error("The recovered review did not rotate the expired session");
+        }
+        this.#renderDocument(recovered, generation);
+        this.#toast("Review session restored.");
+        return true;
+      } catch {
+        if (generation !== this.#generation || this.#destroyed) return false;
+        this.#showSessionRecoveryError();
+        return false;
+      } finally {
+        if (generation === this.#generation) this.#setBusy(false);
+        if (this.#activeRecovery?.generation === generation) this.#activeRecovery = null;
+      }
+    });
+    this.#activeRecovery = {
+      reviewSessionId: reviewDocument.reviewSessionId,
+      generation,
+      promise,
+    };
+    return promise;
   }
 
   async #refreshDocument(): Promise<boolean> {
@@ -2045,11 +2490,16 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       return false;
     }
     const sessionId = this.#document.reviewSessionId;
-    if (this.#activeLoad?.reviewSessionId === sessionId) return this.#activeLoad.promise;
+    if (
+      this.#activeLoad?.reviewSessionId === sessionId &&
+      this.#activeLoad.generation === this.#generation
+    ) {
+      return this.#activeLoad.promise;
+    }
     const generation = ++this.#generation;
     this.#setBusy(true);
     this.#setMeta(`Loading ${this.#document.filename}…`);
-    const promise = (async (): Promise<boolean> => {
+    const promise = Promise.resolve().then(async (): Promise<boolean> => {
       try {
         const refreshed = await this.#ports.documents.refresh(sessionId);
         if (generation !== this.#generation) return false;
@@ -2057,6 +2507,10 @@ class MarkdownReviewController implements MarkdownReviewHandle {
         return true;
       } catch (error) {
         if (generation !== this.#generation) return false;
+        if (isExpiredSessionError(error)) {
+          this.#activeLoad = null;
+          return await this.#recoverExpiredSession();
+        }
         this.#showLoadError(error);
         return false;
       } finally {
@@ -2065,7 +2519,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
           if (this.#activeLoad?.generation === generation) this.#activeLoad = null;
         }
       }
-    })();
+    });
     this.#activeLoad = { reviewSessionId: sessionId, generation, promise };
     return promise;
   }
@@ -2096,7 +2550,12 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       if (item && block) {
         this.#openComposer(
           { ...item, block },
-          { editingId: item.id, feedback: item.feedback, invoker: annotation },
+          {
+            editingId: item.id,
+            feedback: item.feedback,
+            invoker: annotation,
+            revision: item.revision,
+          },
         );
       }
       return;
@@ -2114,7 +2573,12 @@ class MarkdownReviewController implements MarkdownReviewHandle {
         if (block) {
           this.#openComposer(
             { ...item, block },
-            { editingId: item.id, feedback: item.feedback, invoker: queueButton },
+            {
+              editingId: item.id,
+              feedback: item.feedback,
+              invoker: queueButton,
+              revision: item.revision,
+            },
           );
         }
       }
@@ -2124,6 +2588,18 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     const href = link?.dataset["reviewHref"];
     if (!link || !href) return;
     event.preventDefault();
+    const nativeSelection = this.#view.getSelection?.();
+    if (
+      event.detail > 0 &&
+      nativeSelection &&
+      !nativeSelection.isCollapsed &&
+      nativeSelection.toString().trim() &&
+      Array.from({ length: nativeSelection.rangeCount }, (_, index) =>
+        nativeSelection.getRangeAt(index),
+      ).some((range) => this.#rangeIntersectsTarget(range, link))
+    ) {
+      return;
+    }
     if (
       this.#ports.presentation.capabilities.externalLinks === false ||
       !this.#ports.presentation.openExternal
@@ -2208,10 +2684,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
         }
         if (event.button === 2) {
           this.#captureSelection();
-          this.#secondarySelection = {
-            selection: this.#pendingSelection,
-            copyText: this.#selectionCopyText,
-          };
+          this.#secondarySelection = this.#selectionSnapshotAtPointer(event);
         }
         if (!this.#element("composer-help-popover").hidden) {
           if (
@@ -2234,10 +2707,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
           return;
         }
         event.preventDefault();
-        const snapshot = this.#secondarySelection ?? {
-          selection: this.#pendingSelection,
-          copyText: this.#selectionCopyText,
-        };
+        const secondarySelection = this.#secondarySelection;
         this.#secondarySelection = null;
         if (!(event.target instanceof this.#view.Element)) return;
         const surface = this.#element("document");
@@ -2245,6 +2715,12 @@ class MarkdownReviewController implements MarkdownReviewHandle {
           this.#closeContextMenu(false);
           return;
         }
+        const snapshot = this.#targetIsReviewUi(event.target)
+          ? { selection: null, copyText: null }
+          : (secondarySelection ??
+            (event.clientX === 0 && event.clientY === 0
+              ? this.#selectionSnapshotForTarget(event.target)
+              : this.#selectionSnapshotAtPointer(event)));
         const imageTarget = event.target.closest<HTMLButtonElement>("button.image-review-target");
         const invoker =
           imageTarget ?? event.target.closest<HTMLElement>(".review-block") ?? surface;
@@ -2254,6 +2730,8 @@ class MarkdownReviewController implements MarkdownReviewHandle {
           y: event.clientY,
           selection: snapshot.selection,
           copyText: snapshot.copyText,
+          ...(snapshot.range !== undefined ? { range: snapshot.range } : {}),
+          ...(snapshot.direction ? { direction: snapshot.direction } : {}),
           imageTarget,
           invoker,
         });
@@ -2275,11 +2753,14 @@ class MarkdownReviewController implements MarkdownReviewHandle {
               event.target.closest<HTMLElement>("button.image-review-target, .review-block") ??
               surface;
             const rect = target.getBoundingClientRect();
+            const snapshot = this.#selectionSnapshotForTarget(target);
             this.#showContextMenu({
               x: rect.left,
               y: rect.bottom,
-              selection: this.#pendingSelection,
-              copyText: this.#selectionCopyText,
+              selection: snapshot.selection,
+              copyText: snapshot.copyText,
+              ...(snapshot.range !== undefined ? { range: snapshot.range } : {}),
+              ...(snapshot.direction ? { direction: snapshot.direction } : {}),
               imageTarget: target.closest<HTMLButtonElement>("button.image-review-target"),
               invoker: target,
             });
@@ -2295,6 +2776,9 @@ class MarkdownReviewController implements MarkdownReviewHandle {
         } else if (event.key === "Escape" && !this.#element("review-composer").hidden) {
           event.preventDefault();
           this.#requestCloseComposer();
+        } else if (event.key === "Escape" && this.#pendingSelection) {
+          event.preventDefault();
+          this.#dismissPendingSelection();
         }
         if (
           (event.metaKey || event.ctrlKey) &&
@@ -2328,6 +2812,8 @@ class MarkdownReviewController implements MarkdownReviewHandle {
           y: rect.bottom + 6,
           selection: this.#pendingSelection,
           copyText: this.#selectionCopyText,
+          range: this.#selectionRange,
+          direction: this.#selectionDirection,
           invoker: button,
         });
       },

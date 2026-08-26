@@ -9,6 +9,10 @@ const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
 );
+const STATIC_JPEG = Buffer.from(
+  "/9j/4AAQSkZJRgABAgAAAQABAAD//gAQTGF2YzYyLjI4LjEwMgD/2wBDAAgEBAQEBAUFBQUFBQYGBgYGBgYGBgYGBgYHBwcICAgHBwcGBgcHCAgICAkJCQgICAgJCQoKCgwMCwsODg4RERT/xABLAAEBAAAAAAAAAAAAAAAAAAAABwEBAAAAAAAAAAAAAAAAAAAAABABAAAAAAAAAAAAAAAAAAAAABEBAAAAAAAAAAAAAAAAAAAAAP/AABEIAAIAAgMBIgACEQADEQD/2gAMAwEAAhEDEQA/AL+AD//Z",
+  "base64",
+);
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -79,5 +83,51 @@ describe("MarkdownReviewService", () => {
         chunkIndex: 0,
       }),
     ).toThrow(/Markdown changed/);
+  });
+
+  test("recovers a fresh immutable snapshot after the original server loses its session", async () => {
+    const paths = await fixture();
+    const originalService = new MarkdownReviewService();
+    const original = await originalService.open(paths.markdown);
+    await writeFile(paths.image, STATIC_JPEG);
+    const recoveredService = new MarkdownReviewService();
+
+    const recovered = await recoveredService.recoverDocument({
+      reviewSessionId: original.document.reviewSessionId,
+      path: original.document.path,
+      revision: original.document.revision,
+    });
+
+    expect(recovered.document.reviewSessionId).not.toBe(original.document.reviewSessionId);
+    expect(recovered.summary.path).toBe(original.summary.path);
+    expect(recovered.summary.revision).toBe(original.summary.revision);
+    const image = recovered.document.images[0];
+    if (!image) throw new Error("Expected the recovered image snapshot");
+    expect(image.mimeType).toBe("image/jpeg");
+    const chunk = recoveredService.loadAssetChunk({
+      reviewSessionId: recovered.document.reviewSessionId,
+      revision: recovered.document.revision,
+      imageId: image.id,
+      chunkIndex: 0,
+    });
+    expect(Buffer.from(chunk.privateChunk.data, "base64")).toEqual(STATIC_JPEG);
+  });
+
+  test("rejects a recovery identity that conflicts with a live session", async () => {
+    const paths = await fixture();
+    const service = new MarkdownReviewService();
+    const opened = await service.open(paths.markdown);
+
+    try {
+      await service.recoverDocument({
+        reviewSessionId: opened.document.reviewSessionId,
+        path: `${opened.document.path}.forged.md`,
+        revision: opened.document.revision,
+      });
+      throw new Error("Expected the conflicting recovery identity to be rejected");
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/did not match/);
+    }
   });
 });

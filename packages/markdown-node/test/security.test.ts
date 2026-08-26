@@ -244,7 +244,7 @@ describe("filesystem and image trust boundaries", () => {
     expect(() => readPngDimensions(animated)).toThrow(/animated PNG/);
   });
 
-  test("identifies bounded JPEG and static WebP containers with extension agreement", () => {
+  test("identifies bounded safe containers by signature for supported image paths", () => {
     expect(inspectLocalImage(jpegFixture(2, 3), "fixture.jpg")).toEqual({
       mimeType: "image/jpeg",
       width: 2,
@@ -270,9 +270,14 @@ describe("filesystem and image trust boundaries", () => {
       pixels: 20,
     });
 
-    expect(() => inspectLocalImage(ONE_PIXEL_PNG, "fixture.jpg")).toThrow(/does not match/);
-    expect(() => inspectLocalImage(jpegFixture(), "fixture.webp")).toThrow(/does not match/);
-    expect(() => inspectLocalImage(Buffer.from("GIF89a"), "fixture.png")).toThrow(/does not match/);
+    expect(inspectLocalImage(ONE_PIXEL_PNG, "fixture.jpg").mimeType).toBe("image/png");
+    expect(inspectLocalImage(jpegFixture(), "fixture.webp").mimeType).toBe("image/jpeg");
+    expect(() => inspectLocalImage(Buffer.from("GIF89a"), "fixture.png")).toThrow(
+      /supported PNG, JPEG, or WebP signature/,
+    );
+    expect(() => inspectLocalImage(ONE_PIXEL_PNG, "fixture.gif")).toThrow(
+      /use a PNG, JPEG, or WebP/,
+    );
   });
 
   test("rejects animated, malformed, oversized, and pathologically segmented containers", () => {
@@ -451,7 +456,8 @@ describe("filesystem and image trust boundaries", () => {
       expect(chunk.privateChunk.mimeType).toBe(image.mimeType);
     }
     expect(opened.document.html.match(/data-local-image-id="local-image-1"/g)).toHaveLength(2);
-    expect(opened.document.html).toContain("extension does not match");
+    expect(opened.document.html.match(/data-local-image-id="local-image-3"/g)).toHaveLength(2);
+    expect(opened.document.html).not.toContain("Image not rendered");
   });
 
   test("counts invalid image tags against the local reference work budget", async () => {

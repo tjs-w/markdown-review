@@ -91,6 +91,7 @@ interface HarnessOptions {
   readonly capabilities?: MarkdownReviewPorts["presentation"]["capabilities"];
   readonly context?: HostContext;
   readonly refresh?: (reviewSessionId: string) => Promise<ReviewDocument>;
+  readonly recover?: NonNullable<MarkdownReviewPorts["documents"]["recover"]>;
   readonly loadAssetChunk?: MarkdownReviewPorts["documents"]["loadAssetChunk"];
   readonly submit?: (submission: ReviewSubmission) => Promise<void>;
   readonly save?: (snapshot: PersistedReviewState) => Promise<void>;
@@ -107,6 +108,7 @@ function createHarness(options: HarnessOptions = {}) {
   const ports: MarkdownReviewPorts = {
     documents: {
       refresh: options.refresh ?? (() => Promise.resolve(reviewDocument)),
+      ...(options.recover ? { recover: options.recover } : {}),
       loadAssetChunk:
         options.loadAssetChunk ?? (() => Promise.reject(new Error("No images in fixture"))),
     },
@@ -383,6 +385,7 @@ describe("mountMarkdownReview", () => {
     await settle();
     expect(copied).toEqual([longText]);
     expect(document.getElementById("toast-message")?.textContent).toBe("Selected text copied.");
+    expect(window.getSelection()?.toString()).toBe(longText);
 
     handle.destroy();
     installShell();
@@ -416,7 +419,7 @@ describe("mountMarkdownReview", () => {
     restoredHandle.destroy();
   });
 
-  test("surfaces clipboard denial without exposing selected content", async () => {
+  test("offers an exact manual copy fallback without exposing selected content in errors", async () => {
     installShell();
     const harness = createHarness({
       writeClipboard: () => Promise.reject(new Error("sensitive clipboard detail")),
@@ -429,10 +432,86 @@ describe("mountMarkdownReview", () => {
     openContextMenu(paragraph);
     document.getElementById("context-copy-selection")?.click();
     await settle();
-    expect(document.getElementById("toast-message")?.textContent).toBe(
-      "Could not copy the selected text. Check clipboard permission and try again.",
-    );
+    const dialog = document.querySelector<HTMLElement>("[data-review-ui='manual-copy']");
+    const field = dialog?.querySelector<HTMLTextAreaElement>("textarea");
+    expect(dialog?.getAttribute("role")).toBe("dialog");
+    expect(field?.value).toBe("First paragraph for review.");
+    expect(field?.selectionStart).toBe(0);
+    expect(field?.selectionEnd).toBe(field?.value.length);
     expect(document.getElementById("toast-message")?.textContent).not.toContain("First paragraph");
+    field?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.querySelector("[data-review-ui='manual-copy']")).toBeNull();
+    expect(document.activeElement).toBe(paragraph.closest(".review-block"));
+    handle.destroy();
+  });
+
+  test("does not surface a delayed clipboard fallback after a different document renders", async () => {
+    installShell();
+    let rejectClipboard: ((error: Error) => void) | undefined;
+    const clipboard = new Promise<void>((_resolve, reject) => {
+      rejectClipboard = reject;
+    });
+    const harness = createHarness({ writeClipboard: () => clipboard });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    selectText();
+    const paragraph = document.querySelector("#document p");
+    if (!paragraph) throw new Error("Expected review paragraph");
+    openContextMenu(paragraph);
+    document.getElementById("context-copy-selection")?.click();
+    await handle.openDocument({
+      ...reviewDocument,
+      reviewSessionId: "223e4567-e89b-42d3-a456-426614174000",
+      path: "/tmp/other.md",
+      filename: "other.md",
+      title: "Other",
+      revision: "other-revision",
+      html: '<section class="review-block" data-start-line="1" data-end-line="1"><p>Other document text.</p></section>',
+    });
+    rejectClipboard?.(new Error("clipboard denied"));
+    await settle();
+    expect(document.querySelector("[data-review-ui='manual-copy']")).toBeNull();
+    expect(document.body.textContent).not.toContain("First paragraph for review.");
+    handle.destroy();
+  });
+
+  test("ignores an older same-document clipboard failure after a newer copy succeeds", async () => {
+    installShell();
+    let rejectFirstCopy: ((error: Error) => void) | undefined;
+    let writes = 0;
+    const harness = createHarness({
+      writeClipboard() {
+        writes += 1;
+        if (writes === 1) {
+          return new Promise<void>((_resolve, reject) => {
+            rejectFirstCopy = reject;
+          });
+        }
+        return Promise.resolve();
+      },
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+
+    selectText(0);
+    const firstParagraph = document.querySelectorAll("#document p")[0];
+    if (!firstParagraph) throw new Error("Expected first review paragraph");
+    openContextMenu(firstParagraph);
+    document.getElementById("context-copy-selection")?.click();
+
+    selectText(1);
+    const secondParagraph = document.querySelectorAll("#document p")[1];
+    if (!secondParagraph) throw new Error("Expected second review paragraph");
+    openContextMenu(secondParagraph);
+    document.getElementById("context-copy-selection")?.click();
+    await settle();
+    expect(writes).toBe(2);
+    expect(document.getElementById("toast-message")?.textContent).toBe("Selected text copied.");
+
+    rejectFirstCopy?.(new Error("first copy denied"));
+    await settle();
+    expect(document.querySelector("[data-review-ui='manual-copy']")).toBeNull();
+    expect(document.getElementById("toast-message")?.textContent).toBe("Selected text copied.");
     handle.destroy();
   });
 
@@ -495,6 +574,70 @@ describe("mountMarkdownReview", () => {
     expect(document.getElementById("quote")?.textContent).toBe("First paragraph for review.");
     await settle();
     expect(document.getElementById("selection-action")?.hidden).toBe(true);
+    handle.destroy();
+  });
+
+  test("dismisses a pending native selection with Escape and permits identical reselection", async () => {
+    installShell();
+    const harness = createHarness();
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    selectText();
+    expect(document.getElementById("selection-status")?.textContent).toContain(
+      "Selection ready for feedback",
+    );
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(window.getSelection()?.isCollapsed).toBeTrue();
+    expect(document.getElementById("selection-status")?.textContent).toBe("Selection cleared.");
+    selectText();
+    expect(document.getElementById("selection-status")?.textContent).toContain(
+      "Selection ready for feedback",
+    );
+    handle.destroy();
+  });
+
+  test("does not expose stale selection actions outside the selected block", async () => {
+    installShell();
+    const harness = createHarness();
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    selectText();
+    const paragraphs = document.querySelectorAll("#document p");
+    openContextMenu(paragraphs.item(0));
+    expect(document.getElementById("context-copy-selection")?.hidden).toBeFalse();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    openContextMenu(paragraphs.item(1));
+    expect(document.getElementById("context-copy-selection")?.hidden).toBeTrue();
+    expect(document.getElementById("context-comment-selection")?.hidden).toBeTrue();
+    handle.destroy();
+  });
+
+  test("suppresses link activation after selecting link text but preserves click and keyboard use", async () => {
+    installShell();
+    const opened: string[] = [];
+    const harness = createHarness({
+      openExternal(url) {
+        opened.push(url.href);
+        return Promise.resolve();
+      },
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    const link = document.querySelector<HTMLAnchorElement>("[data-review-href]");
+    const text = link?.firstChild;
+    if (!link || !(text instanceof Text)) throw new Error("Expected external link text");
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+    await settle();
+    expect(opened).toEqual([]);
+    window.getSelection()?.removeAllRanges();
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+    link.click();
+    await settle();
+    expect(opened).toEqual(["https://example.com/", "https://example.com/"]);
     handle.destroy();
   });
 
@@ -1011,6 +1154,29 @@ describe("mountMarkdownReview", () => {
     handle.destroy();
   });
 
+  test("allows refresh retry after a synchronous host failure", async () => {
+    installShell();
+    let refreshes = 0;
+    const harness = createHarness({
+      refresh() {
+        refreshes += 1;
+        if (refreshes === 1) throw new Error("synchronous refresh failure");
+        return Promise.resolve({ ...reviewDocument, revision: "retry-succeeded" });
+      },
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+
+    document.getElementById("refresh")?.click();
+    await settle();
+    expect(document.getElementById("meta")?.textContent).toContain("synchronous refresh failure");
+    document.getElementById("refresh")?.click();
+    await settle();
+    expect(refreshes).toBe(2);
+    expect(document.getElementById("meta")?.textContent).toContain("rev retry-succeeded");
+    handle.destroy();
+  });
+
   test("rebuilds queued text highlights after refresh", async () => {
     installShell();
     const initialState = persisted([
@@ -1028,6 +1194,78 @@ describe("mountMarkdownReview", () => {
     await settle(5);
     expect(document.getElementById("meta")?.textContent).toContain("rev next");
     expect(document.querySelector("mark.review-highlight")?.textContent).toBe("First paragraph");
+    handle.destroy();
+  });
+
+  test("renders a changed refresh while preserving the draft and its original revision", async () => {
+    installShell();
+    let resolveRefresh: ((document: ReviewDocument) => void) | undefined;
+    const refresh = new Promise<ReviewDocument>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const harness = createHarness({ refresh: () => refresh });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    document.getElementById("refresh")?.click();
+    selectText();
+    document.getElementById("selection-action")?.click();
+    const field = document.getElementById("feedback") as HTMLTextAreaElement;
+    field.value = "Keep this draft across refresh.";
+    field.setSelectionRange(5, 9);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    const nextSession = "223e4567-e89b-42d3-a456-426614174000";
+    resolveRefresh?.({
+      ...reviewDocument,
+      reviewSessionId: nextSession,
+      revision: "next-revision",
+    });
+    await settle(6);
+    expect(document.getElementById("meta")?.textContent).toContain("rev next-revision");
+    expect(document.getElementById("review-composer")?.hidden).toBeFalse();
+    expect(field.value).toBe("Keep this draft across refresh.");
+    expect(field.selectionStart).toBe(5);
+    expect(field.selectionEnd).toBe(9);
+    expect(document.activeElement).toBe(field);
+    expect(document.querySelector(".composer-source-warning")?.textContent).toContain(
+      "Source changed",
+    );
+    document.getElementById("add-queue")?.click();
+    await settle();
+    expect(harness.saves.at(-1)?.queue[0]?.revision).toBe(reviewDocument.revision);
+    expect(document.querySelector(".status-chip.warning")?.textContent).toBe("Source changed");
+    handle.destroy();
+  });
+
+  test("undo relocates a discarded stale draft after its original passage disappears", async () => {
+    installShell();
+    const harness = createHarness();
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    selectText();
+    document.getElementById("selection-action")?.click();
+    const field = document.getElementById("feedback") as HTMLTextAreaElement;
+    field.value = "Retain this stale draft.";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    document.getElementById("close-composer")?.click();
+    expect(document.getElementById("toast-message")?.textContent).toBe("Draft discarded.");
+    await handle.openDocument({
+      ...reviewDocument,
+      reviewSessionId: "223e4567-e89b-42d3-a456-426614174000",
+      revision: "passage-removed",
+      html: '<section class="review-block" data-start-line="1" data-end-line="4"><p>Replacement content.</p></section>',
+    });
+    document.getElementById("toast-action")?.click();
+    const composer = document.getElementById("review-composer");
+    expect(composer?.hidden).toBeFalse();
+    expect(composer?.isConnected).toBeTrue();
+    expect(field.value).toBe("Retain this stale draft.");
+    expect(document.querySelector(".composer-source-warning")?.textContent).toContain(
+      "could not be relocated",
+    );
+    expect(field.getAttribute("aria-describedby")).toContain("composer-source-warning");
+    document.getElementById("add-queue")?.click();
+    await settle();
+    expect(harness.saves.at(-1)?.queue[0]?.revision).toBe(reviewDocument.revision);
     handle.destroy();
   });
 
@@ -1175,6 +1413,237 @@ describe("mountMarkdownReview", () => {
     await settle(5);
     expect(loads).toBe(1);
     expect(document.querySelector(".local-image-status")?.textContent).toContain("session expired");
+    handle.destroy();
+  });
+
+  test("recovers one fresh document session for concurrent expired image loads", async () => {
+    installShell();
+    const restoreCanvas = installCanvasContext();
+    const bytes = Uint8Array.from([1, 2, 3]);
+    const imageRevision = await sha256Hex(bytes);
+    const recoveredSession = "223e4567-e89b-42d3-a456-426614174000";
+    const imageDocument: ReviewDocument = {
+      ...reviewDocument,
+      html:
+        '<section class="review-block" data-start-line="1" data-end-line="1">' +
+        '<span class="local-image" data-local-image-id="local-image-1" data-alt="Figma target for Active incidents"></span>' +
+        '<span class="local-image" data-local-image-id="local-image-1" data-alt="Figma target for Active incidents"></span></section>',
+      images: [
+        {
+          id: "local-image-1",
+          mimeType: "image/png",
+          revision: imageRevision,
+          modifiedAt: NOW,
+          byteLength: bytes.length,
+          chunkCount: 1,
+          width: 1,
+          height: 1,
+        },
+      ],
+    };
+    const recoveredDocument = { ...imageDocument, reviewSessionId: recoveredSession };
+    let recoveries = 0;
+    let loads = 0;
+    const harness = createHarness({
+      recover(document) {
+        recoveries += 1;
+        expect(document.reviewSessionId).toBe(SESSION);
+        return Promise.resolve(recoveredDocument);
+      },
+      loadAssetChunk(request) {
+        loads += 1;
+        if (request.reviewSessionId === SESSION) {
+          return Promise.reject(
+            new ReviewPortError(
+              "server_error",
+              "The Markdown review session is unavailable or expired; reopen the review.",
+              false,
+              "session_expired",
+            ),
+          );
+        }
+        return Promise.resolve({
+          kind: "markdown-review-image-chunk",
+          reviewSessionId: recoveredSession,
+          revision: recoveredDocument.revision,
+          imageId: "local-image-1",
+          imageRevision,
+          mimeType: "image/png",
+          chunkIndex: 0,
+          chunkCount: 1,
+          byteOffset: 0,
+          byteLength: bytes.length,
+          data: Buffer.from(bytes).toString("base64"),
+        });
+      },
+    });
+    const handle = mountMarkdownReview({
+      ports: harness.ports,
+      initialDocument: imageDocument,
+      imageDecoder: {
+        decode: () =>
+          Promise.resolve({
+            width: 1,
+            height: 1,
+            data: Uint8ClampedArray.from([1, 2, 3, 255]),
+          }),
+      },
+    });
+    try {
+      await settle(10);
+      expect(recoveries).toBe(1);
+      expect(loads).toBe(2);
+      expect(document.querySelectorAll("button.image-review-target")).toHaveLength(2);
+      expect(document.querySelector("button.image-review-target")?.getAttribute("aria-label")).toBe(
+        "Add feedback for image: Figma target for Active incidents",
+      );
+      expect(document.querySelector("[data-review-ui='session-recovery']")).toBeNull();
+      expect(document.querySelector(".image-retry")).toBeNull();
+    } finally {
+      handle.destroy();
+      restoreCanvas();
+    }
+  });
+
+  test("shows one document recovery alert when an expired image session cannot recover", async () => {
+    installShell();
+    const imageDocument: ReviewDocument = {
+      ...reviewDocument,
+      html: '<section class="review-block" data-start-line="1" data-end-line="1"><span class="local-image" data-local-image-id="local-image-1" data-alt="Diagram"></span></section>',
+      images: [
+        {
+          id: "local-image-1",
+          mimeType: "image/png",
+          revision: "0".repeat(64),
+          modifiedAt: NOW,
+          byteLength: 1,
+          chunkCount: 1,
+          width: 1,
+          height: 1,
+        },
+      ],
+    };
+    let recoveries = 0;
+    const harness = createHarness({
+      recover() {
+        recoveries += 1;
+        return Promise.reject(new Error("private path detail"));
+      },
+      loadAssetChunk: () =>
+        Promise.reject(
+          new ReviewPortError(
+            "server_error",
+            "The Markdown review session is unavailable or expired; reopen the review.",
+            false,
+            "session_expired",
+          ),
+        ),
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: imageDocument });
+    await settle(7);
+    expect(recoveries).toBe(1);
+    expect(document.querySelectorAll("[data-review-ui='session-recovery']")).toHaveLength(1);
+    expect(
+      document.querySelector("[data-review-ui='session-recovery']")?.textContent,
+    ).not.toContain("private path detail");
+    expect(document.querySelector(".image-retry")).toBeNull();
+    handle.destroy();
+  });
+
+  test("rejects a recovery snapshot that reuses the expired session", async () => {
+    installShell();
+    const imageDocument: ReviewDocument = {
+      ...reviewDocument,
+      html: '<section class="review-block" data-start-line="1" data-end-line="1"><span class="local-image" data-local-image-id="local-image-1" data-alt="Diagram"></span></section>',
+      images: [
+        {
+          id: "local-image-1",
+          mimeType: "image/png",
+          revision: "0".repeat(64),
+          modifiedAt: NOW,
+          byteLength: 1,
+          chunkCount: 1,
+          width: 1,
+          height: 1,
+        },
+      ],
+    };
+    const harness = createHarness({
+      recover: () => Promise.resolve(imageDocument),
+      loadAssetChunk: () =>
+        Promise.reject(
+          new ReviewPortError(
+            "server_error",
+            "The Markdown review session is unavailable or expired; reopen the review.",
+            false,
+            "session_expired",
+          ),
+        ),
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: imageDocument });
+    await settle(7);
+    expect(document.querySelectorAll("[data-review-ui='session-recovery']")).toHaveLength(1);
+    expect(document.querySelector(".image-retry")).toBeNull();
+    expect(document.getElementById("toast-message")?.textContent).not.toBe(
+      "Review session restored.",
+    );
+    handle.destroy();
+  });
+
+  test("allows recovery retry after a synchronous host failure", async () => {
+    installShell();
+    const recoveredSession = "223e4567-e89b-42d3-a456-426614174000";
+    const imageDocument: ReviewDocument = {
+      ...reviewDocument,
+      html: '<section class="review-block" data-start-line="1" data-end-line="1"><span class="local-image" data-local-image-id="local-image-1" data-alt="Diagram"></span></section>',
+      images: [
+        {
+          id: "local-image-1",
+          mimeType: "image/png",
+          revision: "0".repeat(64),
+          modifiedAt: NOW,
+          byteLength: 1,
+          chunkCount: 1,
+          width: 1,
+          height: 1,
+        },
+      ],
+    };
+    let recoveries = 0;
+    const harness = createHarness({
+      recover() {
+        recoveries += 1;
+        if (recoveries === 1) throw new Error("synchronous recovery failure");
+        return Promise.resolve({ ...imageDocument, reviewSessionId: recoveredSession });
+      },
+      loadAssetChunk(request) {
+        if (request.reviewSessionId === SESSION) {
+          return Promise.reject(
+            new ReviewPortError(
+              "server_error",
+              "The Markdown review session is unavailable or expired; reopen the review.",
+              false,
+              "session_expired",
+            ),
+          );
+        }
+        return Promise.reject(new ReviewPortError("server_error", "Image unavailable"));
+      },
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: imageDocument });
+    await settle(7);
+    const retry = document.querySelector<HTMLButtonElement>(
+      "[data-review-ui='session-recovery'] button",
+    );
+    expect(recoveries).toBe(1);
+    expect(retry?.textContent).toBe("Retry recovery");
+
+    retry?.click();
+    await settle(7);
+    expect(recoveries).toBe(2);
+    expect(document.querySelector("[data-review-ui='session-recovery']")).toBeNull();
+    expect(document.getElementById("toast-message")?.textContent).toBe("Review session restored.");
+    expect(document.querySelector(".image-retry")).not.toBeNull();
     handle.destroy();
   });
 

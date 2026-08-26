@@ -124,6 +124,67 @@ describe("review text highlights", () => {
     expect(root.querySelectorAll("mark.review-highlight").length).toBeGreaterThan(1);
   });
 
+  test("captures canonical source text across inserted review UI", () => {
+    const root = installDocument();
+    const firstText = root.querySelector("p")?.firstChild;
+    const secondText = root.querySelectorAll("p")[1]?.firstChild;
+    const firstBlock = root.querySelector<HTMLElement>(".review-block");
+    if (!(firstText instanceof Text) || !(secondText instanceof Text) || !firstBlock) {
+      throw new Error("Expected cross-block source text");
+    }
+
+    const queued = document.createElement("aside");
+    queued.dataset["reviewUi"] = "queue-group";
+    queued.textContent = "Inserted comment must not become source text";
+    firstBlock.insertAdjacentElement("afterend", queued);
+
+    const range = document.createRange();
+    range.setStart(firstText, 0);
+    range.setEnd(secondText, 5);
+    expect(range.toString()).toContain("Inserted comment must not become source text");
+
+    const captured = captureReviewTextAnchor(root, range);
+    expect(captured?.quote).toBe("Alpha beta gamma beta.\nDelta");
+    expect(captured?.textAnchor).toEqual({
+      version: 1,
+      start: 0,
+      end: 28,
+      prefix: "",
+      suffix: " epsilon.\nOmega.",
+    });
+    expect(captured?.startBlock.dataset["startLine"]).toBe("1");
+    expect(captured?.startBlock.dataset["endLine"]).toBe("2");
+    expect(captured?.endBlock.dataset["startLine"]).toBe("3");
+    expect(captured?.endBlock.dataset["endLine"]).toBe("4");
+  });
+
+  test("rejects selection boundaries inside review UI and local images", () => {
+    const root = installDocument();
+    const sourceText = root.querySelector("p")?.firstChild;
+    const firstBlock = root.querySelector<HTMLElement>(".review-block");
+    const imageText = root.querySelector(".local-image")?.firstChild;
+    if (!(sourceText instanceof Text) || !firstBlock || !(imageText instanceof Text)) {
+      throw new Error("Expected source and local-image text");
+    }
+
+    const queued = document.createElement("aside");
+    queued.dataset["reviewUi"] = "queue-group";
+    queued.textContent = "Inserted review control";
+    firstBlock.appendChild(queued);
+    const queuedText = queued.firstChild;
+    if (!(queuedText instanceof Text)) throw new Error("Expected inserted review UI text");
+
+    const endingInReviewUi = document.createRange();
+    endingInReviewUi.setStart(sourceText, 0);
+    endingInReviewUi.setEnd(queuedText, queuedText.data.length);
+    expect(captureReviewTextAnchor(root, endingInReviewUi)).toBeNull();
+
+    const startingInLocalImage = document.createRange();
+    startingInLocalImage.setStart(imageText, 0);
+    startingInLocalImage.setEnd(root.querySelectorAll("p")[2] ?? root, 1);
+    expect(captureReviewTextAnchor(root, startingInLocalImage)).toBeNull();
+  });
+
   test("keeps native highlight ranges out of review UI inserted between selected blocks", () => {
     const root = installDocument();
     const firstText = root.querySelector("em")?.firstChild;

@@ -1,5 +1,6 @@
 import {
   ErrorReviewDocumentSchema,
+  ReviewDocumentRecoveryRequestSchema,
   ReviewDocumentSummarySchema,
   ReviewImageChunkRequestSchema,
   ReviewImageChunkSummarySchema,
@@ -19,7 +20,7 @@ import { z } from "zod";
 
 import type { ReviewUiAssetLoader } from "./assets.js";
 
-export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v25.html";
+export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v26.html";
 const REVIEW_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
 
 const SERVER_INSTRUCTIONS =
@@ -28,6 +29,9 @@ const SERVER_INSTRUCTIONS =
 export interface MarkdownReviewBackend {
   open(path: string): Promise<OpenedMarkdownReview>;
   loadDocument(reviewSessionId: string): Promise<OpenedMarkdownReview>;
+  recoverDocument?(
+    request: z.infer<typeof ReviewDocumentRecoveryRequestSchema>,
+  ): Promise<OpenedMarkdownReview>;
   loadAssetChunk(request: z.infer<typeof ReviewImageChunkRequestSchema>): LoadedAssetChunk;
 }
 
@@ -234,6 +238,62 @@ export function createMarkdownReviewServer(options: CreateMarkdownReviewServerOp
             document: ErrorReviewDocumentSchema.parse({
               kind: "markdown-review-document",
               reviewSessionId,
+              error: message,
+            }),
+          },
+        };
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "recover_markdown_review_document",
+    {
+      title: "Recover Markdown review document",
+      description:
+        "Create a fresh rendered snapshot for the same Markdown path after an active component review session expires or is lost during host reconnection.",
+      inputSchema: ReviewDocumentRecoveryRequestSchema.shape,
+      outputSchema: ReviewDocumentSummarySchema.shape,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+        idempotentHint: false,
+      },
+      _meta: {
+        ui: { visibility: ["app"] },
+        "openai/visibility": "private",
+        "openai/widgetAccessible": true,
+      },
+    },
+    async (request) => {
+      try {
+        if (!backend.recoverDocument) {
+          throw new Error("Document recovery is unavailable for this Markdown review host.");
+        }
+        const recovered = await backend.recoverDocument(request);
+        if (
+          recovered.document.path !== request.path ||
+          recovered.document.reviewSessionId === request.reviewSessionId
+        ) {
+          throw new Error("The Markdown review host returned an invalid recovery snapshot.");
+        }
+        return {
+          structuredContent: recovered.summary,
+          content: [],
+          _meta: { document: recovered.document },
+        };
+      } catch (error: unknown) {
+        const message = safeDocumentLoadError(error);
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: message }],
+          _meta: {
+            document: ErrorReviewDocumentSchema.parse({
+              kind: "markdown-review-document",
+              path: request.path,
+              reviewSessionId: request.reviewSessionId,
               error: message,
             }),
           },

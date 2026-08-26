@@ -7,6 +7,7 @@ import {
 import {
   PrivateReviewImageChunkSchema,
   ReviewDocumentSchema,
+  ReviewDocumentRecoveryRequestSchema,
   ReviewImageChunkRequestSchema,
   ReviewSubmissionSchema,
   type ReviewDocument,
@@ -94,6 +95,63 @@ async function callComponentTool<T>(call: () => Promise<T>): Promise<T> {
       "The component tool request could not be completed.",
       true,
     );
+  }
+}
+
+function copyTextWithLegacyCommand(hostWindow: Window, text: string): boolean {
+  const hostDocument = Reflect.get(hostWindow, "document") as Document | undefined;
+  const execCommand = hostDocument
+    ? (Reflect.get(hostDocument, "execCommand") as ((command: string) => boolean) | undefined)
+    : undefined;
+  if (!hostDocument?.body || typeof execCommand !== "function") {
+    return false;
+  }
+
+  const activeElement = hostDocument.activeElement;
+  const getSelection = Reflect.get(hostWindow, "getSelection") as
+    (() => Selection | null) | undefined;
+  const selection = typeof getSelection === "function" ? getSelection.call(hostWindow) : null;
+  const ranges = selection
+    ? Array.from({ length: selection.rangeCount }, (_, index) =>
+        selection.getRangeAt(index).cloneRange(),
+      )
+    : [];
+  const restoreSelection = (): void => {
+    try {
+      const currentSelection =
+        (typeof getSelection === "function" ? getSelection.call(hostWindow) : null) ?? selection;
+      currentSelection?.removeAllRanges();
+      for (const range of ranges) currentSelection?.addRange(range);
+    } catch {
+      // A detached prior selection cannot be restored safely.
+    }
+  };
+  const textarea = hostDocument.createElement("textarea");
+  textarea.value = text;
+  textarea.readOnly = true;
+  textarea.tabIndex = -1;
+  textarea.setAttribute("aria-hidden", "true");
+  textarea.style.cssText =
+    "position:fixed;inset:0 auto auto -10000px;width:1px;height:1px;opacity:0;pointer-events:none";
+  hostDocument.body.appendChild(textarea);
+
+  try {
+    textarea.focus({ preventScroll: true });
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    return Reflect.apply(execCommand, hostDocument, ["copy"]);
+  } catch {
+    return false;
+  } finally {
+    textarea.remove();
+    if (activeElement && "focus" in activeElement) {
+      try {
+        (activeElement as HTMLElement).focus({ preventScroll: true });
+      } catch {
+        // Clipboard fallback cleanup must not replace the original copy result.
+      }
+    }
+    restoreSelection();
   }
 }
 
@@ -212,6 +270,23 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
           );
         });
       },
+      async recover(document) {
+        if (!serverTools) throw new Error("This MCP Apps host does not allow component tools");
+        const request = ReviewDocumentRecoveryRequestSchema.parse({
+          reviewSessionId: document.reviewSessionId,
+          path: document.path,
+          revision: document.revision,
+        });
+        return callComponentTool(async () => {
+          const result = await app.callServerTool({
+            name: "recover_markdown_review_document",
+            arguments: request,
+          });
+          return ReviewDocumentSchema.parse(
+            unwrapToolPayload(parseReviewDocumentToolResult(result)),
+          );
+        });
+      },
     },
     submissions: {
       async submit(request) {
@@ -267,7 +342,11 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
     state: createReviewStateStore(hostWindow),
     clipboard: {
       async writeText(text) {
-        const clipboard = Reflect.get(hostWindow.navigator, "clipboard") as Clipboard | undefined;
+        if (copyTextWithLegacyCommand(hostWindow, text)) return;
+        const navigator = Reflect.get(hostWindow, "navigator") as Navigator | undefined;
+        const clipboard = navigator
+          ? (Reflect.get(navigator, "clipboard") as Clipboard | undefined)
+          : undefined;
         if (!clipboard || typeof clipboard.writeText !== "function") {
           throw new Error("Clipboard access is unavailable in this host");
         }

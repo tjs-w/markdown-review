@@ -8,6 +8,7 @@ import {
   ReviewImageChunkSummarySchema,
   type PrivateReviewImageChunk,
   type ReviewDocument,
+  type ReviewDocumentRecoveryRequest,
   type ReviewDocumentSummary,
   type ReviewImageChunkRequest,
   type ReviewImageChunkSummary,
@@ -86,6 +87,28 @@ export class MarkdownReviewService {
   async loadDocument(reviewSessionId: string): Promise<OpenedMarkdownReview> {
     const session = this.#sessions.get(reviewSessionId);
     return this.open(session.document.path);
+  }
+
+  async recoverDocument(request: ReviewDocumentRecoveryRequest): Promise<OpenedMarkdownReview> {
+    try {
+      const session = this.#sessions.get(request.reviewSessionId);
+      if (
+        session.document.path !== request.path ||
+        session.document.revision !== request.revision
+      ) {
+        throw new Error("The Markdown review recovery reference did not match the session.");
+      }
+      return await this.open(session.document.path);
+    } catch (error: unknown) {
+      if (
+        !(error instanceof Error) ||
+        error.message !==
+          "The Markdown review session is unavailable or expired; reopen the review."
+      ) {
+        throw error;
+      }
+      return this.open(request.path);
+    }
   }
 
   loadAssetChunk(request: ReviewImageChunkRequest): LoadedAssetChunk {

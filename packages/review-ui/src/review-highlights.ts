@@ -134,10 +134,6 @@ function boundaryOffset(
   return nodes.at(-1)?.end ?? 0;
 }
 
-function comparableSelectionText(value: string): string {
-  return value.replace(/\s+/gu, "");
-}
-
 export function captureReviewTextAnchor(
   root: HTMLElement,
   range: Range,
@@ -155,7 +151,6 @@ export function captureReviewTextAnchor(
   if (end <= start) return null;
 
   const quote = index.source.slice(start, end);
-  if (comparableSelectionText(quote) !== comparableSelectionText(range.toString())) return null;
   const startNode = index.nodes.find((entry) => entry.start <= start && start < entry.end);
   const endNode = index.nodes.find((entry) => entry.start < end && end <= entry.end);
   if (!startNode || !endNode) return null;

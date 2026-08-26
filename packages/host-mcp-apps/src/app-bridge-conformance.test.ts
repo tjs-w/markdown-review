@@ -199,6 +199,12 @@ describe("official MCP Apps AppBridge conformance", () => {
     expect(
       await rejectionMessage(harness.host.ports.documents.refresh(firstDocument.reviewSessionId)),
     ).toContain("does not allow component tools");
+    expect(
+      await rejectionMessage(
+        harness.host.ports.documents.recover?.(firstDocument) ??
+          Promise.reject(new Error("Missing recovery adapter")),
+      ),
+    ).toContain("does not allow component tools");
     expect(await rejectionMessage(harness.host.ports.submissions.submit(submission))).toContain(
       "does not accept review submissions",
     );
@@ -219,10 +225,77 @@ describe("official MCP Apps AppBridge conformance", () => {
     await closeHarness(harness);
   });
 
-  test("writes only through the feature-detected host clipboard", async () => {
-    const copied: string[] = [];
+  test("copies synchronously through the legacy command and restores focus and selection", async () => {
+    document.body.innerHTML =
+      "<button id=focus>Copy</button><p id=source>Exact source selection</p>";
+    const button = document.getElementById("focus") as HTMLButtonElement;
+    const source = document.getElementById("source");
+    if (!source) throw new Error("Missing clipboard selection fixture");
+    button.focus();
+    const range = document.createRange();
+    range.selectNodeContents(source);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+    let modernWrites = 0;
+    let legacyValue = "";
+    const hadOwnExecCommand = Object.hasOwn(document, "execCommand");
+    const originalExecCommand = Reflect.get(document, "execCommand");
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value(command: string) {
+        expect(command).toBe("copy");
+        legacyValue = (document.activeElement as HTMLTextAreaElement).value;
+        return true;
+      },
+    });
     const host = createMcpAppsHost({
       hostWindow: {
+        document,
+        getSelection: () => window.getSelection(),
+        navigator: {
+          clipboard: {
+            writeText() {
+              modernWrites += 1;
+              return Promise.resolve();
+            },
+          },
+        },
+      } as unknown as Window,
+      onDocument: () => undefined,
+    });
+    try {
+      await host.ports.clipboard?.writeText("Exact source selection");
+      expect(legacyValue).toBe("Exact source selection");
+      expect(modernWrites).toBe(0);
+      expect(document.activeElement).toBe(button);
+      expect(window.getSelection()?.toString()).toBe("Exact source selection");
+      expect(document.querySelector("textarea")).toBeNull();
+    } finally {
+      if (hadOwnExecCommand) {
+        Object.defineProperty(document, "execCommand", {
+          configurable: true,
+          value: originalExecCommand,
+        });
+      } else {
+        Reflect.deleteProperty(document, "execCommand");
+      }
+    }
+  });
+
+  test("falls back to the feature-detected async clipboard when legacy copy fails", async () => {
+    document.body.replaceChildren();
+    window.getSelection()?.removeAllRanges();
+    const copied: string[] = [];
+    const hadOwnExecCommand = Object.hasOwn(document, "execCommand");
+    const originalExecCommand = Reflect.get(document, "execCommand");
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: () => false,
+    });
+    const host = createMcpAppsHost({
+      hostWindow: {
+        document,
+        getSelection: () => window.getSelection(),
         navigator: {
           clipboard: {
             writeText(text: string) {
@@ -234,9 +307,23 @@ describe("official MCP Apps AppBridge conformance", () => {
       } as unknown as Window,
       onDocument: () => undefined,
     });
-    await host.ports.clipboard?.writeText("Exact source selection");
-    expect(copied).toEqual(["Exact source selection"]);
+    try {
+      await host.ports.clipboard?.writeText("Exact source selection");
+      expect(copied).toEqual(["Exact source selection"]);
+      expect(document.querySelector("textarea")).toBeNull();
+    } finally {
+      if (hadOwnExecCommand) {
+        Object.defineProperty(document, "execCommand", {
+          configurable: true,
+          value: originalExecCommand,
+        });
+      } else {
+        Reflect.deleteProperty(document, "execCommand");
+      }
+    }
+  });
 
+  test("reports clipboard unavailability only after both browser paths are absent", async () => {
     const unavailable = createMcpAppsHost({
       hostWindow: { navigator: {} } as unknown as Window,
       onDocument: () => undefined,
@@ -408,6 +495,46 @@ describe("official MCP Apps AppBridge conformance", () => {
       }),
     );
     expect(JSON.stringify(imageChunkSummary)).not.toContain(privateImageData);
+
+    await closeHarness(harness);
+  });
+
+  test("recovers a fresh private document through the app-only recovery tool", async () => {
+    const requests: unknown[] = [];
+    const harness = await createHarness({
+      capabilities: { serverTools: {} },
+      onCallTool(params) {
+        requests.push(params);
+        return Promise.resolve({
+          content: [],
+          structuredContent: ReviewDocumentSummarySchema.parse({
+            path: laterDocument.path,
+            filename: laterDocument.filename,
+            title: laterDocument.title,
+            revision: laterDocument.revision,
+            modifiedAt: laterDocument.modifiedAt,
+            sizeBytes: laterDocument.sizeBytes,
+            lineCount: laterDocument.lineCount,
+            blockCount: laterDocument.blockCount,
+          }),
+          _meta: { document: laterDocument },
+        });
+      },
+    });
+
+    const recovered = await harness.host.ports.documents.recover?.(firstDocument);
+    expect(recovered).toEqual(laterDocument);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toEqual(
+      expect.objectContaining({
+        name: "recover_markdown_review_document",
+        arguments: {
+          reviewSessionId: firstDocument.reviewSessionId,
+          path: firstDocument.path,
+          revision: firstDocument.revision,
+        },
+      }),
+    );
 
     await closeHarness(harness);
   });

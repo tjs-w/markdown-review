@@ -339,13 +339,12 @@ export function imageMimeTypeForPath(imagePath: string): ReviewImageMimeType | n
 }
 
 export function inspectLocalImage(bytes: Buffer, imagePath: string): LocalImageInfo {
-  const expectedMimeType = imageMimeTypeForPath(imagePath);
-  if (!expectedMimeType) {
+  if (!imageMimeTypeForPath(imagePath)) {
     throw new Error("use a PNG, JPEG, or WebP file for local review images");
   }
   const detectedMimeType = detectImageMimeType(bytes);
-  if (!detectedMimeType || detectedMimeType !== expectedMimeType) {
-    throw new Error("the image extension does not match its supported file signature");
+  if (!detectedMimeType) {
+    throw new Error("the file does not have a supported PNG, JPEG, or WebP signature");
   }
 
   const dimensions =

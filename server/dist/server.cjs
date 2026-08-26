@@ -39480,6 +39480,9 @@ var ReviewDocumentIdentitySchema = external_exports.object({
   path: PathSchema,
   revision: external_exports.string().min(1).max(MAX_REVISION_LENGTH)
 }).strict();
+var ReviewDocumentRecoveryRequestSchema = ReviewDocumentIdentitySchema.extend({
+  reviewSessionId: external_exports.uuid()
+}).strict();
 var ReviewDocumentSummarySchema = ReviewDocumentIdentitySchema.extend({
   filename: external_exports.string().min(1).max(MAX_PATH_LENGTH),
   title: external_exports.string().min(1).max(MAX_DOCUMENT_TITLE_LENGTH),
@@ -39990,13 +39993,12 @@ function imageMimeTypeForPath(imagePath) {
   return IMAGE_MIME_BY_EXTENSION.get((0, import_node_path.extname)(imagePath).toLowerCase()) ?? null;
 }
 function inspectLocalImage(bytes, imagePath) {
-  const expectedMimeType = imageMimeTypeForPath(imagePath);
-  if (!expectedMimeType) {
+  if (!imageMimeTypeForPath(imagePath)) {
     throw new Error("use a PNG, JPEG, or WebP file for local review images");
   }
   const detectedMimeType = detectImageMimeType(bytes);
-  if (!detectedMimeType || detectedMimeType !== expectedMimeType) {
-    throw new Error("the image extension does not match its supported file signature");
+  if (!detectedMimeType) {
+    throw new Error("the file does not have a supported PNG, JPEG, or WebP signature");
   }
   const dimensions = detectedMimeType === "image/png" ? inspectPng(bytes) : detectedMimeType === "image/jpeg" ? inspectJpeg(bytes) : inspectWebp(bytes);
   return { ...dimensions, mimeType: detectedMimeType };
@@ -41591,6 +41593,20 @@ var MarkdownReviewService = class {
   async loadDocument(reviewSessionId) {
     const session = this.#sessions.get(reviewSessionId);
     return this.open(session.document.path);
+  }
+  async recoverDocument(request) {
+    try {
+      const session = this.#sessions.get(request.reviewSessionId);
+      if (session.document.path !== request.path || session.document.revision !== request.revision) {
+        throw new Error("The Markdown review recovery reference did not match the session.");
+      }
+      return await this.open(session.document.path);
+    } catch (error51) {
+      if (!(error51 instanceof Error) || error51.message !== "The Markdown review session is unavailable or expired; reopen the review.") {
+        throw error51;
+      }
+      return this.open(request.path);
+    }
   }
   loadAssetChunk(request) {
     const session = this.#sessions.get(request.reviewSessionId);
@@ -51200,7 +51216,7 @@ var EMPTY_COMPLETION_RESULT = {
 };
 
 // packages/mcp-server/src/server.ts
-var MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v25.html";
+var MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v26.html";
 var REVIEW_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
 var SERVER_INSTRUCTIONS = "Use open_markdown_review only to render an absolute .md or .markdown path. The Markdown file is canonical. Review comments have stable #N serials within one queued review round and may reference earlier queued comments by serial; treat #N as a reference only when the feedback payload explicitly lists it as one, because literal #N text is supported. The component submits the full queue as one batch, clears it after a successful submission, and restarts numbering at #1. Discuss question-only items without editing, apply explicit change requests with normal filesystem tools, then reopen the review after any edits.";
 function developerModeEnabled(value) {
@@ -51373,6 +51389,57 @@ function createMarkdownReviewServer(options) {
             document: ErrorReviewDocumentSchema.parse({
               kind: "markdown-review-document",
               reviewSessionId,
+              error: message
+            })
+          }
+        };
+      }
+    }
+  );
+  K3(
+    server2,
+    "recover_markdown_review_document",
+    {
+      title: "Recover Markdown review document",
+      description: "Create a fresh rendered snapshot for the same Markdown path after an active component review session expires or is lost during host reconnection.",
+      inputSchema: ReviewDocumentRecoveryRequestSchema.shape,
+      outputSchema: ReviewDocumentSummarySchema.shape,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+        idempotentHint: false
+      },
+      _meta: {
+        ui: { visibility: ["app"] },
+        "openai/visibility": "private",
+        "openai/widgetAccessible": true
+      }
+    },
+    async (request) => {
+      try {
+        if (!backend.recoverDocument) {
+          throw new Error("Document recovery is unavailable for this Markdown review host.");
+        }
+        const recovered = await backend.recoverDocument(request);
+        if (recovered.document.path !== request.path || recovered.document.reviewSessionId === request.reviewSessionId) {
+          throw new Error("The Markdown review host returned an invalid recovery snapshot.");
+        }
+        return {
+          structuredContent: recovered.summary,
+          content: [],
+          _meta: { document: recovered.document }
+        };
+      } catch (error51) {
+        const message = safeDocumentLoadError(error51);
+        return {
+          isError: true,
+          content: [{ type: "text", text: message }],
+          _meta: {
+            document: ErrorReviewDocumentSchema.parse({
+              kind: "markdown-review-document",
+              path: request.path,
+              reviewSessionId: request.reviewSessionId,
               error: message
             })
           }

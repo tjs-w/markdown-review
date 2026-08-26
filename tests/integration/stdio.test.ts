@@ -94,10 +94,11 @@ describe("checked-in Node stdio bundle", () => {
       expect(tools.tools.map((tool) => tool.name)).toEqual([
         "open_markdown_review",
         "load_markdown_review_document",
+        "recover_markdown_review_document",
         "load_markdown_review_image_chunk",
       ]);
 
-      const resource = await client.readResource({ uri: "ui://markdown-review/v25.html" });
+      const resource = await client.readResource({ uri: "ui://markdown-review/v26.html" });
       const content = resource.contents[0];
       expect(content?.mimeType).toBe("text/html;profile=mcp-app");
       const html = content && "text" in content ? content.text : "";
@@ -166,6 +167,19 @@ describe("checked-in Node stdio bundle", () => {
         arguments: { reviewSessionId: crypto.randomUUID() },
       });
       expect(forged.isError).toBe(true);
+
+      const recovered = await client.callTool({
+        name: "recover_markdown_review_document",
+        arguments: {
+          reviewSessionId: crypto.randomUUID(),
+          path: document.path,
+          revision: document.revision,
+        },
+      });
+      expect(recovered.isError).toBeUndefined();
+      const recoveredDocument = ReviewDocumentSchema.parse(metadata(recovered._meta)["document"]);
+      expect(recoveredDocument.reviewSessionId).not.toBe(document.reviewSessionId);
+      expect(recoveredDocument.path).toBe(document.path);
     } finally {
       await client.close();
     }

@@ -8,6 +8,7 @@ import {
   PrivateReviewImageChunkSchema,
   ReviewBatchV1Schema,
   ReviewDocumentSchema,
+  ReviewDocumentRecoveryRequestSchema,
   ReviewImageDescriptorSchema,
   ReviewImageMimeTypeSchema,
   ReviewSelectionSchema,
@@ -15,6 +16,21 @@ import {
 } from "./index";
 
 describe("portable review contracts", () => {
+  test("keeps reconnect recovery bound to a document identity and expired session reference", () => {
+    const request = {
+      reviewSessionId: "8707d8a0-b84e-4a46-98e1-68ca135945de",
+      path: "/tmp/review.md",
+      revision: "r1",
+    };
+    expect(ReviewDocumentRecoveryRequestSchema.parse(request)).toEqual(request);
+    expect(
+      ReviewDocumentRecoveryRequestSchema.safeParse({ ...request, path: undefined }).success,
+    ).toBe(false);
+    expect(ReviewDocumentRecoveryRequestSchema.safeParse({ ...request, extra: true }).success).toBe(
+      false,
+    );
+  });
+
   test("keeps the markdown-review/v1 batch wire shape exact", () => {
     const parsed = ReviewBatchV1Schema.parse({
       schema: "markdown-review/v1",

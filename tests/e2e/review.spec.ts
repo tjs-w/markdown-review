@@ -342,15 +342,21 @@ test("suppresses the host menu, copies source text, and queues whole-document fe
   expect(prevented).toEqual({ document: true, toolbar: true, productionShift: true });
 
   const paragraph = page.locator(".review-block p").first();
-  await paragraph.evaluate((element) => {
+  const selectedPoint = await paragraph.evaluate((element) => {
     const range = document.createRange();
     range.selectNodeContents(element);
     const selection = window.getSelection();
     selection?.removeAllRanges();
     selection?.addRange(range);
     document.dispatchEvent(new Event("selectionchange"));
+    const selectionRect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+    const paragraphRect = element.getBoundingClientRect();
+    return {
+      x: selectionRect.left - paragraphRect.left + Math.min(8, selectionRect.width / 2),
+      y: selectionRect.top - paragraphRect.top + selectionRect.height / 2,
+    };
   });
-  await paragraph.click({ button: "right" });
+  await paragraph.click({ button: "right", position: selectedPoint });
   const menu = page.locator("#review-context-menu");
   await expect(menu).toBeVisible();
   await expect(page.locator("#context-copy-selection")).toBeFocused();
@@ -366,10 +372,8 @@ test("suppresses the host menu, copies source text, and queues whole-document fe
   );
   expect(copied).toEqual(["Select and review this paragraph."]);
 
-  await page.evaluate(() => {
-    window.getSelection()?.removeAllRanges();
-    document.dispatchEvent(new Event("selectionchange"));
-  });
+  await page.keyboard.press("Escape");
+  await expect.poll(() => page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
   await page.locator("#document").focus();
   await page.keyboard.press("Shift+F10");
   await expect(page.locator("#context-comment-document")).toBeFocused();

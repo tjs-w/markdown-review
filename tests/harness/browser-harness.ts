@@ -56,7 +56,7 @@ const transport = new StdioClientTransport({
 const client = new Client({ name: "markdown-review-browser-harness", version: "0.1.0" });
 await client.connect(transport);
 
-const resource = await client.readResource({ uri: "ui://markdown-review/v25.html" });
+const resource = await client.readResource({ uri: "ui://markdown-review/v26.html" });
 const resourceContent = resource.contents[0];
 if (!resourceContent || !("text" in resourceContent)) {
   throw new Error("The Markdown Review HTML resource was not returned");
@@ -120,6 +120,18 @@ const hostScript = `<script>
         state.clipboardWrites.push(text);
         return Promise.resolve();
       }
+    }
+  });
+  Object.defineProperty(document, "execCommand", {
+    configurable: true,
+    value(command) {
+      if (command !== "copy") return false;
+      const active = document.activeElement;
+      const text = active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement
+        ? active.value.slice(active.selectionStart ?? 0, active.selectionEnd ?? 0)
+        : window.getSelection()?.toString() ?? "";
+      state.clipboardWrites.push(text);
+      return true;
     }
   });
   if (query.get("codex") === "1") {
