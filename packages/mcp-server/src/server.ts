@@ -20,7 +20,7 @@ import { z } from "zod";
 
 import type { ReviewUiAssetLoader } from "./assets.js";
 
-export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v26.html";
+export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v27.html";
 const REVIEW_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
 
 const SERVER_INSTRUCTIONS =

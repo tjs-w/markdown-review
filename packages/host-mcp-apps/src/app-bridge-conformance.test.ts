@@ -12,6 +12,7 @@ import {
   ReviewDocumentSummarySchema,
   ReviewSubmissionSchema,
   type ReviewDocument,
+  type ReviewSubmission,
 } from "@markdown-review/contracts";
 import { ReviewPortError } from "@markdown-review/review-ui";
 
@@ -85,11 +86,15 @@ async function createHarness({
   context = {},
   onCallTool,
   onTeardown,
+  hostWindow,
+  submissionFormatter,
 }: {
   readonly capabilities?: McpUiHostCapabilities;
   readonly context?: McpUiHostContext;
   readonly onCallTool?: NonNullable<AppBridge["oncalltool"]>;
   readonly onTeardown?: () => void | Promise<void>;
+  readonly hostWindow?: Window;
+  readonly submissionFormatter?: (submission: ReviewSubmission) => string;
 } = {}): Promise<AppBridgeHarness> {
   const [appTransport, bridgeTransport] = InMemoryTransport.createLinkedPair();
   const documents: ReviewDocument[] = [];
@@ -102,7 +107,7 @@ async function createHarness({
   );
   bridge.oncalltool = onCallTool;
   const host = createMcpAppsHost({
-    hostWindow: { innerWidth: 1024 } as Window,
+    hostWindow: hostWindow ?? ({ innerWidth: 1024 } as Window),
     transport: appTransport,
     onDocument(document) {
       documents.push(document);
@@ -111,6 +116,7 @@ async function createHarness({
       errors.push(error);
     },
     ...(onTeardown ? { onTeardown } : {}),
+    ...(submissionFormatter ? { submissionFormatter } : {}),
   });
 
   await bridge.connect(bridgeTransport);
@@ -195,6 +201,7 @@ describe("official MCP Apps AppBridge conformance", () => {
     expect(capabilities.documentTools).toBe(false);
     expect(capabilities.externalLinks).toBe(false);
     expect(capabilities.submission).toBe(false);
+    expect(capabilities.reviewSubmission).toBe(false);
     expect(capabilities.displayMode).toBe(false);
     expect(
       await rejectionMessage(harness.host.ports.documents.refresh(firstDocument.reviewSessionId)),
@@ -206,8 +213,14 @@ describe("official MCP Apps AppBridge conformance", () => {
       ),
     ).toContain("does not allow component tools");
     expect(await rejectionMessage(harness.host.ports.submissions.submit(submission))).toContain(
-      "does not accept review submissions",
+      "Direct submission is unavailable",
     );
+    expect(
+      await rejectionMessage(
+        harness.host.ports.submissions.review?.(submission) ??
+          Promise.reject(new Error("Missing reviewed-submission adapter")),
+      ),
+    ).toContain("does not accept review submissions");
     expect(
       await rejectionMessage(
         harness.host.ports.presentation.openExternal?.(new URL("https://example.com")) ??
@@ -395,7 +408,7 @@ describe("official MCP Apps AppBridge conformance", () => {
     await closeHarness(harness);
   });
 
-  test("submits through ui/message when Codex advertises an empty message capability", async () => {
+  test("keeps ui/message review-only when the direct Codex extension is absent", async () => {
     const received: McpUiMessageRequest["params"][] = [];
     const [appTransport, bridgeTransport] = InMemoryTransport.createLinkedPair();
     const bridge = new AppBridge(
@@ -415,8 +428,16 @@ describe("official MCP Apps AppBridge conformance", () => {
     await bridge.connect(bridgeTransport);
     await host.connect();
 
-    expect(host.ports.presentation.capabilities.submission).toBe(true);
-    await host.ports.submissions.submit(submission);
+    expect(host.ports.presentation.capabilities.submission).toBe(false);
+    expect(host.ports.presentation.capabilities.reviewSubmission).toBe(true);
+    expect(await rejectionMessage(host.ports.submissions.submit(submission))).toContain(
+      "Direct submission is unavailable",
+    );
+    expect(received).toEqual([]);
+    if (typeof host.ports.submissions.review !== "function") {
+      throw new Error("Missing reviewed-submission adapter");
+    }
+    await host.ports.submissions.review(submission);
     expect(received).toHaveLength(1);
     const content = received[0]?.content[0];
     expect(content?.type).toBe("text");
@@ -426,6 +447,167 @@ describe("official MCP Apps AppBridge conformance", () => {
 
     await host.close();
     await bridge.close();
+  });
+
+  test("keeps direct submission and reviewed ui/message transport distinct", async () => {
+    const direct: { readonly prompt: string; readonly scrollToBottom: boolean }[] = [];
+    const reviewed: McpUiMessageRequest["params"][] = [];
+    const openai = {
+      sendFollowUpMessage(options: { readonly prompt: string; readonly scrollToBottom: boolean }) {
+        expect(this).toBe(openai);
+        direct.push(options);
+        return Promise.resolve();
+      },
+    };
+    const [appTransport, bridgeTransport] = InMemoryTransport.createLinkedPair();
+    const bridge = new AppBridge(
+      null,
+      { name: "markdown-review-test-host", version: "1.0.0" },
+      { message: {} },
+    );
+    bridge.onmessage = (message) => {
+      reviewed.push(message);
+      return Promise.resolve({});
+    };
+    const host = createMcpAppsHost({
+      hostWindow: { innerWidth: 1024, openai } as unknown as Window,
+      transport: appTransport,
+      onDocument: () => undefined,
+      submissionFormatter: (value) => `formatted:${value.submissionId}`,
+    });
+    await bridge.connect(bridgeTransport);
+    await host.connect();
+
+    expect(host.ports.presentation.capabilities.submission).toBe(true);
+    expect(host.ports.presentation.capabilities.reviewSubmission).toBe(true);
+    await host.ports.submissions.submit(submission);
+    expect(direct).toEqual([
+      { prompt: `formatted:${submission.submissionId}`, scrollToBottom: true },
+    ]);
+    expect(reviewed).toEqual([]);
+
+    if (typeof host.ports.submissions.review !== "function") {
+      throw new Error("Missing reviewed-submission adapter");
+    }
+    await host.ports.submissions.review(submission);
+    expect(direct).toHaveLength(1);
+    expect(reviewed).toHaveLength(1);
+    expect(reviewed[0]?.content).toEqual([
+      { type: "text", text: `formatted:${submission.submissionId}` },
+    ]);
+
+    await host.close();
+    await bridge.close();
+  });
+
+  test("supports direct-only submission while reviewed submission remains capability-gated", async () => {
+    const direct: unknown[] = [];
+    const harness = await createHarness({
+      hostWindow: {
+        innerWidth: 1024,
+        openai: {
+          sendFollowUpMessage(options: unknown) {
+            direct.push(options);
+          },
+        },
+      } as unknown as Window,
+    });
+
+    expect(harness.host.ports.presentation.capabilities.submission).toBe(true);
+    expect(harness.host.ports.presentation.capabilities.reviewSubmission).toBe(false);
+    await harness.host.ports.submissions.submit(submission);
+    expect(direct).toEqual([{ prompt: JSON.stringify(submission), scrollToBottom: true }]);
+    expect(
+      await rejectionMessage(
+        harness.host.ports.submissions.review?.(submission) ??
+          Promise.reject(new Error("Missing reviewed-submission adapter")),
+      ),
+    ).toContain("does not accept review submissions");
+
+    await closeHarness(harness);
+  });
+
+  test("surfaces a reviewed ui/message rejection without attempting direct submission", async () => {
+    const received: McpUiMessageRequest["params"][] = [];
+    const [appTransport, bridgeTransport] = InMemoryTransport.createLinkedPair();
+    const bridge = new AppBridge(
+      null,
+      { name: "markdown-review-test-host", version: "1.0.0" },
+      { message: {} },
+    );
+    bridge.onmessage = (message) => {
+      received.push(message);
+      return Promise.resolve({ isError: true });
+    };
+    const host = createMcpAppsHost({
+      hostWindow: { innerWidth: 1024 } as Window,
+      transport: appTransport,
+      onDocument: () => undefined,
+    });
+    await bridge.connect(bridgeTransport);
+    await host.connect();
+
+    expect(host.ports.presentation.capabilities.submission).toBe(false);
+    expect(host.ports.presentation.capabilities.reviewSubmission).toBe(true);
+    if (typeof host.ports.submissions.review !== "function") {
+      throw new Error("Missing reviewed-submission adapter");
+    }
+    expect(await rejectionMessage(host.ports.submissions.review(submission))).toContain(
+      "host rejected the review submission",
+    );
+    expect(received).toHaveLength(1);
+
+    await host.close();
+    await bridge.close();
+  });
+
+  test("propagates synchronous and asynchronous direct-submission failures without fallback", async () => {
+    const synchronousFailure = new Error("direct sync failure");
+    const asynchronousFailure = new Error("direct async failure");
+    for (const failure of [
+      {
+        error: synchronousFailure,
+        send() {
+          throw synchronousFailure;
+        },
+      },
+      {
+        error: asynchronousFailure,
+        send() {
+          return Promise.reject(asynchronousFailure);
+        },
+      },
+    ]) {
+      const reviewed: McpUiMessageRequest["params"][] = [];
+      const [appTransport, bridgeTransport] = InMemoryTransport.createLinkedPair();
+      const bridge = new AppBridge(
+        null,
+        { name: "markdown-review-test-host", version: "1.0.0" },
+        { message: {} },
+      );
+      bridge.onmessage = (message) => {
+        reviewed.push(message);
+        return Promise.resolve({});
+      };
+      const host = createMcpAppsHost({
+        hostWindow: {
+          innerWidth: 1024,
+          openai: {
+            sendFollowUpMessage: () => failure.send(),
+          },
+        } as unknown as Window,
+        transport: appTransport,
+        onDocument: () => undefined,
+      });
+      await bridge.connect(bridgeTransport);
+      await host.connect();
+
+      expect(await rejectionError(host.ports.submissions.submit(submission))).toBe(failure.error);
+      expect(reviewed).toEqual([]);
+
+      await host.close();
+      await bridge.close();
+    }
   });
 
   test("preserves container dimensions and reports inline height without owning host width", async () => {

@@ -59,6 +59,7 @@ export interface HostCapabilities {
   readonly externalLinks?: boolean;
   readonly intrinsicHeight?: boolean;
   readonly submission?: boolean;
+  readonly reviewSubmission?: boolean;
 }
 
 export interface HostContext {
@@ -84,6 +85,7 @@ export interface DocumentPort {
 
 export interface SubmissionPort {
   submit(request: ReviewSubmission): Promise<void>;
+  review?(request: ReviewSubmission): Promise<void>;
 }
 
 export interface PresentationPort {

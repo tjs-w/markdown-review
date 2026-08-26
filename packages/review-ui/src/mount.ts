@@ -48,6 +48,7 @@ interface ActiveSelection extends ReviewSelection {
 }
 
 type SelectionDirection = "forward" | "backward";
+type SubmissionIntent = "submit" | "review";
 
 interface ContextMenuSnapshot {
   readonly selection: ActiveSelection | null;
@@ -327,6 +328,8 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   #copyOperation = 0;
   #manualCopyDialog: HTMLElement | null = null;
   #manualCopyReturnFocus: HTMLElement | null = null;
+  #submissionMenuReturnFocus: HTMLElement | null = null;
+  #compositionActive = false;
   #toastTimer: ReturnType<typeof setTimeout> | undefined;
   #saveChain: Promise<void> = Promise.resolve();
   #documentBusy = false;
@@ -372,6 +375,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#unsubscribePresentation();
     clearReviewHighlights(this.#element("document"));
     this.#closeContextMenu(false);
+    this.#closeSubmissionMenu(false);
     this.#element("document").querySelector("[data-review-ui='session-recovery']")?.remove();
     if (this.#selectionFrame !== undefined) {
       this.#view.cancelAnimationFrame(this.#selectionFrame);
@@ -937,27 +941,130 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       "aria-label",
       `${commentsOpen ? "Hide" : "Show"} ${total} review ${total === 1 ? "comment" : "comments"}`,
     );
+    const submitActions = this.#element("submit-actions");
     const send = this.#element<HTMLButtonElement>("send-all");
+    const options = this.#element<HTMLButtonElement>("submit-options");
+    const review = this.#element<HTMLButtonElement>("submit-review");
+    const composerOpen = !this.#element("review-composer").hidden;
+    const commonSubmissionDisabled = count === 0 || sending || composerOpen;
+    const directSubmissionUnavailable = this.#ports.presentation.capabilities.submission === false;
+    const reviewedSubmissionUnavailable =
+      typeof this.#ports.submissions.review !== "function" ||
+      this.#ports.presentation.capabilities.reviewSubmission === false;
+    submitActions.dataset["reviewAvailable"] = String(!reviewedSubmissionUnavailable);
+    submitActions.hidden = count === 0;
     send.hidden = count === 0;
+    options.hidden = reviewedSubmissionUnavailable;
     this.#element("send-all-label").textContent = sending ? "Submitting…" : "Submit";
     this.#element("send-all-count").textContent = `(${count})`;
-    const composerOpen = !this.#element("review-composer").hidden;
-    const submissionUnavailable = this.#ports.presentation.capabilities.submission === false;
-    send.disabled = count === 0 || sending || composerOpen || submissionUnavailable;
+    send.disabled = commonSubmissionDisabled || directSubmissionUnavailable;
+    options.disabled = commonSubmissionDisabled || reviewedSubmissionUnavailable;
+    review.disabled = commonSubmissionDisabled || reviewedSubmissionUnavailable;
+    if (options.disabled || options.hidden) this.#closeSubmissionMenu(false);
     send.setAttribute(
       "aria-label",
-      submissionUnavailable
-        ? "Submitting review feedback is unavailable in this host"
+      directSubmissionUnavailable
+        ? "Direct submission to Codex is unavailable in this host"
         : sending
           ? "Submitting review feedback"
           : composerOpen
             ? "Queue or close the open comment before submitting feedback"
-            : `Submit ${count} queued comments`,
+            : `Submit ${count} queued ${count === 1 ? "comment" : "comments"} to Codex`,
+    );
+    options.setAttribute(
+      "aria-label",
+      composerOpen
+        ? "Queue or close the open comment before reviewing feedback"
+        : `More submission options for ${count} queued ${count === 1 ? "comment" : "comments"}`,
     );
     this.#element("launcher-meta").textContent = count
       ? `${count} ${count === 1 ? "feedback item" : "feedback items"} queued`
       : "Open fullscreen review";
     this.#renderCommentsPanel();
+  }
+
+  #canSubmit(): boolean {
+    return (
+      Boolean(this.#document) &&
+      this.#round.persisted.queue.length > 0 &&
+      this.#sendingIds.size === 0 &&
+      this.#element("review-composer").hidden &&
+      this.#manualCopyDialog === null &&
+      this.#ports.presentation.capabilities.submission !== false
+    );
+  }
+
+  #closeSubmissionMenu(restoreFocus = false): void {
+    const menu = this.#root.getElementById("submit-menu");
+    if (!(menu instanceof this.#view.HTMLElement) || menu.hidden) return;
+    menu.hidden = true;
+    this.#element("submit-options").setAttribute("aria-expanded", "false");
+    const returnFocus = this.#submissionMenuReturnFocus;
+    this.#submissionMenuReturnFocus = null;
+    if (restoreFocus && returnFocus?.isConnected && !returnFocus.hidden) {
+      returnFocus.focus({ preventScroll: true });
+    }
+  }
+
+  #openSubmissionMenu(): void {
+    const toggle = this.#element<HTMLButtonElement>("submit-options");
+    const review = this.#element<HTMLButtonElement>("submit-review");
+    if (
+      toggle.disabled ||
+      toggle.hidden ||
+      typeof this.#ports.submissions.review !== "function" ||
+      this.#ports.presentation.capabilities.reviewSubmission === false
+    ) {
+      return;
+    }
+    this.#closeContextMenu(false);
+    const menu = this.#element("submit-menu");
+    this.#submissionMenuReturnFocus = toggle;
+    menu.hidden = false;
+    toggle.setAttribute("aria-expanded", "true");
+    review.tabIndex = 0;
+    review.focus({ preventScroll: true });
+  }
+
+  #toggleSubmissionMenu(): void {
+    if (this.#element("submit-menu").hidden) this.#openSubmissionMenu();
+    else this.#closeSubmissionMenu(true);
+  }
+
+  #handleSubmissionMenuKeydown(event: KeyboardEvent): boolean {
+    const menu = this.#element("submit-menu");
+    const toggle = this.#element("submit-options");
+    if (
+      menu.hidden &&
+      event.target === toggle &&
+      (event.key === "ArrowDown" || event.key === "ArrowUp")
+    ) {
+      event.preventDefault();
+      this.#openSubmissionMenu();
+      return true;
+    }
+    if (menu.hidden || !(event.target instanceof this.#view.HTMLElement)) return false;
+    if (!menu.contains(event.target)) return false;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.#closeSubmissionMenu(true);
+      return true;
+    }
+    if (event.key === "Tab") {
+      this.#closeSubmissionMenu(false);
+      return false;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home") {
+      event.preventDefault();
+      this.#element("submit-review").focus({ preventScroll: true });
+      return true;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      event.target.click();
+      return true;
+    }
+    return false;
   }
 
   #openCommentsPanel(): void {
@@ -1944,17 +2051,32 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#updateQueueUi();
   }
 
-  async #sendFeedbackItems(): Promise<void> {
+  async #sendFeedbackItems(intent: SubmissionIntent = "submit"): Promise<void> {
     if (!this.#document || this.#round.persisted.queue.length === 0 || this.#sendingIds.size > 0)
       return;
-    if (this.#ports.presentation.capabilities.submission === false) {
-      this.#toast("Submitting review feedback is unavailable in this host.");
+    if (intent === "submit" && this.#ports.presentation.capabilities.submission === false) {
+      this.#toast("Direct submission to Codex is unavailable in this host.");
       return;
     }
     if (!this.#element("review-composer").hidden) {
       this.#toast("Queue or close the open comment before submitting this review round.");
       return;
     }
+    const submissionPort = this.#ports.submissions;
+    const dispatchSubmission =
+      intent === "review"
+        ? submissionPort.review?.bind(submissionPort)
+        : submissionPort.submit.bind(submissionPort);
+    if (
+      !dispatchSubmission ||
+      (intent === "review" && this.#ports.presentation.capabilities.reviewSubmission === false)
+    ) {
+      this.#toast("Review before sending is unavailable in this host.");
+      return;
+    }
+    const reviewReturnFocus =
+      intent === "review" ? this.#element<HTMLButtonElement>("submit-options") : null;
+    this.#closeSubmissionMenu(false);
     const submissionId = makeId();
     let prepared: ReturnType<typeof prepareReviewSubmission>;
     try {
@@ -1975,14 +2097,13 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       if (!(await this.#persistState(false))) {
         throw new Error("the stable submission ID could not be saved; feedback was not submitted");
       }
-      const completedState = completeReviewSubmission(
+      await dispatchSubmission(prepared.submission);
+      accepted = true;
+      this.#round = completeReviewSubmission(
         this.#round,
         prepared.submission.submissionId,
         new Date().toISOString(),
       );
-      await this.#ports.submissions.submit(prepared.submission);
-      accepted = true;
-      this.#round = completedState;
       this.#renderQueueCards();
       succeeded = true;
       const count = prepared.submission.itemIds.length;
@@ -2007,11 +2128,18 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     } finally {
       this.#sendingIds.clear();
       this.#syncSendingUi();
-      if (succeeded) {
+      if (succeeded && intent === "review") {
         const next = this.#round.persisted.queue[0];
         if (next) this.#focusQueuedAnnotation(next.id, this.#findAnchorBlock(next));
         else if (fallback) this.#focusReviewBlock(fallback);
         else this.#element("comments-toggle").focus();
+      } else if (
+        !succeeded &&
+        reviewReturnFocus?.isConnected &&
+        !reviewReturnFocus.hidden &&
+        !reviewReturnFocus.disabled
+      ) {
+        reviewReturnFocus.focus({ preventScroll: true });
       }
     }
   }
@@ -2645,6 +2773,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       "scroll",
       () => {
         this.#closeContextMenu(false);
+        this.#closeSubmissionMenu(this.#element("submit-menu").contains(this.#root.activeElement));
         this.#scheduleSelectionAction(false);
       },
       { capture: true, passive: true, signal },
@@ -2653,6 +2782,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       "resize",
       () => {
         this.#closeContextMenu(false);
+        this.#closeSubmissionMenu(this.#element("submit-menu").contains(this.#root.activeElement));
         this.#scheduleSelectionAction(false);
       },
       { passive: true, signal },
@@ -2681,6 +2811,9 @@ class MarkdownReviewController implements MarkdownReviewHandle {
           !this.#element("review-actions").contains(event.target)
         ) {
           this.#closeContextMenu(false);
+        }
+        if (!this.#element("submit-actions").contains(event.target)) {
+          this.#closeSubmissionMenu(false);
         }
         if (event.button === 2) {
           this.#captureSelection();
@@ -2739,8 +2872,49 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       { capture: true, signal },
     );
     this.#root.addEventListener(
+      "compositionstart",
+      () => {
+        this.#compositionActive = true;
+      },
+      { signal },
+    );
+    this.#root.addEventListener(
+      "compositionend",
+      () => {
+        this.#compositionActive = false;
+      },
+      { signal },
+    );
+    this.#root.addEventListener(
       "keydown",
       (event) => {
+        const legacyKeyCode = Reflect.get(event, "keyCode");
+        const editableTarget =
+          event.target instanceof this.#view.Element &&
+          Boolean(
+            event.target.closest(
+              'textarea, input, select, [contenteditable]:not([contenteditable="false"])',
+            ),
+          );
+        if (
+          !event.defaultPrevented &&
+          event.key === "Enter" &&
+          event.shiftKey &&
+          (event.metaKey || event.ctrlKey) &&
+          !event.altKey &&
+          !event.repeat &&
+          !event.isComposing &&
+          !this.#compositionActive &&
+          legacyKeyCode !== 229 &&
+          !editableTarget &&
+          this.#canSubmit()
+        ) {
+          event.preventDefault();
+          this.#closeSubmissionMenu(false);
+          void this.#sendFeedbackItems();
+          return;
+        }
+        if (this.#handleSubmissionMenuKeydown(event)) return;
         if (this.#handleContextMenuKeydown(event)) return;
         if (
           (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) &&
@@ -2924,6 +3098,20 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       "click",
       () => {
         void this.#sendFeedbackItems();
+      },
+      { signal },
+    );
+    this.#element("submit-options").addEventListener(
+      "click",
+      () => {
+        this.#toggleSubmissionMenu();
+      },
+      { signal },
+    );
+    this.#element("submit-review").addEventListener(
+      "click",
+      () => {
+        void this.#sendFeedbackItems("review");
       },
       { signal },
     );

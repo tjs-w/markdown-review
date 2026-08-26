@@ -3,6 +3,23 @@ import { expect, test, type Page } from "@playwright/test";
 
 const requestLog = new WeakMap<Page, string[]>();
 
+interface DirectSubmissionRequest {
+  readonly prompt: string;
+  readonly scrollToBottom: boolean;
+}
+
+function submittedDirectPrompt(requests: readonly unknown[]): string {
+  expect(requests).toHaveLength(1);
+  const request = requests[0];
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new TypeError("Expected one direct Codex submission");
+  }
+  const { prompt, scrollToBottom } = request as Partial<DirectSubmissionRequest>;
+  expect(scrollToBottom).toBe(true);
+  if (typeof prompt !== "string") throw new TypeError("Expected a direct submission prompt");
+  return prompt;
+}
+
 function submittedMessageText(messages: readonly unknown[]): string {
   expect(messages).toHaveLength(1);
   const message = messages[0];
@@ -147,8 +164,19 @@ test.afterEach(async ({ page }) => {
   expect(requestLog.get(page) ?? []).toEqual([]);
 });
 
-test("preserves native selection, queues feedback, and submits one batch", async ({ page }) => {
-  expect(await page.evaluate(() => "openai" in window)).toBe(false);
+test("preserves native selection, queues feedback, and directly submits one batch", async ({
+  page,
+}) => {
+  expect(
+    await page.evaluate(
+      () =>
+        typeof (
+          window as Window & {
+            openai?: { sendFollowUpMessage?: unknown };
+          }
+        ).openai?.sendFollowUpMessage === "function",
+    ),
+  ).toBe(true);
   const paragraph = page.locator(".review-block p").first();
   await expect(paragraph).toContainText("Select and review");
   await paragraph.evaluate((element) => {
@@ -181,20 +209,25 @@ test("preserves native selection, queues feedback, and submits one batch", async
   await expect(page.locator(".annotation-badge")).toHaveText("1");
   expect(await reviewHighlightCount(page)).toBe(1);
   const submit = page.locator("#send-all");
-  await expect(submit).toHaveAccessibleName("Submit 1 queued comments");
+  await expect(submit).toHaveAccessibleName("Submit 1 queued comment to Codex");
   await submit.click();
   await expect(page.locator(".annotation-badge")).toHaveCount(0);
   expect(await reviewHighlightCount(page)).toBe(0);
   await expect(submit).toBeHidden();
-  const messages = await page.evaluate(() => {
+  await expect(page.locator("html")).toHaveAttribute("data-direct-submission-count", "1");
+  const hostSubmissions = await page.evaluate(() => {
     const host = (
       window as Window & {
-        __markdownReviewHost?: { messages: unknown[] };
+        __markdownReviewHost?: { directSubmissions: unknown[]; messages: unknown[] };
       }
     ).__markdownReviewHost;
-    return host?.messages ?? [];
+    return {
+      direct: host?.directSubmissions ?? [],
+      reviewed: host?.messages ?? [],
+    };
   });
-  const submittedText = submittedMessageText(messages);
+  expect(hostSubmissions.reviewed).toHaveLength(0);
+  const submittedText = submittedDirectPrompt(hostSubmissions.direct);
   expect(submittedText).toContain(
     "Handle every `review.items` entry against canonical `review.file` + `review.revision`",
   );
@@ -207,6 +240,38 @@ test("preserves native selection, queues feedback, and submits one batch", async
       items: [{ id: "#1", comment: "Clarify this statement while keeping literal #1." }],
     },
   });
+});
+
+test("retains reviewed feedback and restores disclosure focus when the host rejects it", async ({
+  page,
+}) => {
+  await page.goto("/?review-error=1");
+  await expect(page.locator("#title")).toHaveText("Markdown Review Fixture");
+  await queueFirstParagraph(page, "Review this before sending");
+  const options = page.locator("#submit-options");
+  const review = page.locator("#submit-review");
+
+  await options.click();
+  await expect(review).toBeFocused();
+  await review.click();
+  await expect(page.locator("#toast-message")).toContainText("host rejected the review submission");
+  await expect(page.locator(".annotation-badge")).toHaveText("1");
+  await expect(page.locator("#send-all")).toBeEnabled();
+  await expect(options).toBeEnabled();
+  await expect(options).toBeFocused();
+  await expect(page.locator("html")).toHaveAttribute("data-submitted-message-count", "1");
+  const submissionCounts = await page.evaluate(() => {
+    const host = (
+      window as Window & {
+        __markdownReviewHost?: { directSubmissions: unknown[]; messages: unknown[] };
+      }
+    ).__markdownReviewHost;
+    return {
+      direct: host?.directSubmissions.length ?? 0,
+      reviewed: host?.messages.length ?? 0,
+    };
+  });
+  expect(submissionCounts).toEqual({ direct: 0, reviewed: 1 });
 });
 
 test("keeps the selection action at the directional endpoint through scrolling and reflow", async ({
@@ -399,7 +464,25 @@ test("suppresses the host menu, copies source text, and queues whole-document fe
   await page.locator("#comments-toggle").click();
   await expect(page.getByRole("button", { name: "Go to document for comment 1" })).toBeVisible();
   await page.keyboard.press("Escape");
-  await page.locator("#send-all").click();
+  const submitOptions = page.locator("#submit-options");
+  await expect(submitOptions).toHaveAttribute("aria-haspopup", "menu");
+  await expect(submitOptions).toHaveAttribute("aria-expanded", "false");
+  await submitOptions.click();
+  const submitMenu = page.locator("#submit-menu");
+  const review = page.locator("#submit-review");
+  await expect(submitOptions).toHaveAttribute("aria-expanded", "true");
+  await expect(submitMenu).toBeVisible();
+  await expect(review).toBeFocused();
+  const submissionMenuResults = await new AxeBuilder({ page })
+    .include("#submit-actions")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(submissionMenuResults.violations).toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(submitMenu).toBeHidden();
+  await expect(submitOptions).toBeFocused();
+  await submitOptions.click();
+  await review.click();
   await expect(page.locator("html")).toHaveAttribute("data-submitted-message-count", "1");
   const messages = await page.evaluate(
     () =>
@@ -677,10 +760,9 @@ test("supports a keyboard-only queue, comments rail, and submit journey", async 
   await page.keyboard.press("Enter");
   await page.keyboard.press("Escape");
   await expect(commentsToggle).toBeFocused();
-  const submit = page.locator("#send-all");
-  await submit.focus();
-  await page.keyboard.press("Enter");
-  await expect(submit).toBeHidden();
+  await page.keyboard.press("Control+Shift+Enter");
+  await expect(page.locator("#send-all")).toBeHidden();
+  await expect(page.locator("html")).toHaveAttribute("data-direct-submission-count", "1");
 });
 
 test("supports the coarse-pointer review controls", async ({ page, isMobile }) => {
@@ -869,6 +951,14 @@ test("reflows at 320 CSS pixels and honors accessibility media", async ({ page }
   expect(focusIndicator.style).not.toBe("none");
   expect(focusIndicator.width).toBeGreaterThanOrEqual(2);
   await page.keyboard.press("Escape");
+  await page.locator("#submit-options").click();
+  const submitMenuBox = await page.locator("#submit-menu").boundingBox();
+  if (!submitMenuBox) throw new Error("Expected submit menu geometry");
+  expect(submitMenuBox.x).toBeGreaterThanOrEqual(7);
+  expect(submitMenuBox.x + submitMenuBox.width).toBeLessThanOrEqual(313);
+  await expect(page.locator("#submit-review")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#submit-options")).toBeFocused();
   await expect(page.locator("#document h1")).toBeVisible();
   expect(await reviewHighlightCount(page)).toBe(1);
   const horizontalOverflow = await page.evaluate(() =>

@@ -56,7 +56,7 @@ const transport = new StdioClientTransport({
 const client = new Client({ name: "markdown-review-browser-harness", version: "0.1.0" });
 await client.connect(transport);
 
-const resource = await client.readResource({ uri: "ui://markdown-review/v26.html" });
+const resource = await client.readResource({ uri: "ui://markdown-review/v27.html" });
 const resourceContent = resource.contents[0];
 if (!resourceContent || !("text" in resourceContent)) {
   throw new Error("The Markdown Review HTML resource was not returned");
@@ -105,6 +105,7 @@ const hostScript = `<script>
     : null;
   const state = window.__markdownReviewHost = {
     messages: [],
+    directSubmissions: [],
     sizeChanges: [],
     externalLinks: [],
     toolCalls: [],
@@ -112,6 +113,14 @@ const hostScript = `<script>
     clipboardWrites: [],
     widgetState: seededWidgetState,
     setWidgetStateCalls: 0
+  };
+  window.openai = {
+    sendFollowUpMessage(request) {
+      state.directSubmissions.push(request);
+      document.documentElement.dataset.directSubmissionCount = String(state.directSubmissions.length);
+      document.documentElement.dataset.lastDirectSubmission = JSON.stringify(request);
+      return Promise.resolve();
+    }
   };
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
@@ -135,14 +144,14 @@ const hostScript = `<script>
     }
   });
   if (query.get("codex") === "1") {
-    window.openai = {
+    Object.assign(window.openai, {
       widgetState: seededWidgetState,
       setWidgetState(nextState) {
         state.setWidgetStateCalls += 1;
-        this.widgetState = nextState;
+        window.openai.widgetState = nextState;
         state.widgetState = nextState;
       }
-    };
+    });
   }
   const respond = (id, result) => window.postMessage({ jsonrpc: "2.0", id, result }, "*");
   const notify = (method, params) => window.postMessage({ jsonrpc: "2.0", method, params }, "*");
@@ -199,6 +208,7 @@ const hostScript = `<script>
         state.messages.push(request.params);
         document.documentElement.dataset.submittedMessageCount = String(state.messages.length);
         document.documentElement.dataset.lastSubmittedMessage = JSON.stringify(request.params);
+        if (query.get("review-error") === "1") result = { isError: true };
       } else if (request.method === "ui/open-link") {
         state.externalLinks.push(request.params.url);
       } else if (request.method === "ui/request-display-mode") {

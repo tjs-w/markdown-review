@@ -305,6 +305,45 @@
         opacity: 0.5;
         cursor: default;
       }
+      .submission-actions {
+        position: relative;
+        display: inline-flex;
+        align-items: stretch;
+      }
+      .submission-actions #send-all {
+        border-radius: 7px 0 0 7px;
+      }
+      .submission-actions[data-review-available="false"] #send-all {
+        border-radius: 7px;
+      }
+      .submission-actions #submit-options {
+        width: 40px;
+        min-width: 40px;
+        margin-left: -1px;
+        padding: 0;
+        border-radius: 0 7px 7px 0;
+      }
+      .submission-actions #submit-options .ui-icon {
+        width: 14px;
+        height: 14px;
+      }
+      .submission-actions .button:focus-visible {
+        position: relative;
+        z-index: 1;
+      }
+      .submit-menu {
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
+        z-index: 90;
+        width: min(224px, calc(100vw - 16px));
+        padding: 5px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--paper);
+        box-shadow: var(--shadow);
+        color: var(--ink);
+      }
       .icon-button {
         display: grid;
         place-items: center;
@@ -1235,10 +1274,14 @@
         }
         #comments-toggle,
         #review-actions,
-        #send-all {
+        #send-all,
+        #submit-options {
           width: 38px;
           height: 38px;
           padding: 0;
+        }
+        #submit-options {
+          min-width: 38px;
         }
         #top-count,
         #send-all-count {
@@ -1276,6 +1319,7 @@
         .comment-index-item,
         .comments-panel,
         .review-context-menu,
+        .submit-menu,
         button,
         textarea {
           border-color: CanvasText;
@@ -1388,7 +1432,7 @@
                 d="M3 9.25a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5Zm5 0a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5Zm5 0a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5Z"
               ></path>
             </svg>
-            <span class="label">Review</span>
+            <span class="label">Actions</span>
           </button>
           <button
             class="button with-icon"
@@ -1404,15 +1448,63 @@
             </svg>
             <span class="label">Comments</span><span class="queue-count" id="top-count">0</span>
           </button>
-          <button class="button primary with-icon" id="send-all" type="button" hidden>
-            <svg class="ui-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <path
-                d="M.989 8 .064 2.68a1.342 1.342 0 0 1 1.85-1.462l13.402 5.744a1.13 1.13 0 0 1 0 2.076L1.913 14.782a1.343 1.343 0 0 1-1.85-1.463L.99 8Zm.603-5.288L2.38 7.25h4.87a.75.75 0 0 1 0 1.5H2.38l-.788 4.538L13.929 8Z"
-              ></path>
-            </svg>
-            <span class="label" id="send-all-label">Submit</span
-            ><span id="send-all-count">(0)</span>
-          </button>
+          <div
+            class="submission-actions"
+            id="submit-actions"
+            role="group"
+            aria-label="Submit review feedback"
+            hidden
+          >
+            <button
+              class="button primary with-icon"
+              id="send-all"
+              type="button"
+              title="Submit to Codex (⌘/Ctrl + Shift + Enter)"
+              aria-keyshortcuts="Meta+Shift+Enter Control+Shift+Enter"
+              hidden
+            >
+              <svg class="ui-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path
+                  d="M.989 8 .064 2.68a1.342 1.342 0 0 1 1.85-1.462l13.402 5.744a1.13 1.13 0 0 1 0 2.076L1.913 14.782a1.343 1.343 0 0 1-1.85-1.463L.99 8Zm.603-5.288L2.38 7.25h4.87a.75.75 0 0 1 0 1.5H2.38l-.788 4.538L13.929 8Z"
+                ></path>
+              </svg>
+              <span class="label" id="send-all-label">Submit</span
+              ><span id="send-all-count">(0)</span>
+            </button>
+            <button
+              class="button primary with-icon"
+              id="submit-options"
+              type="button"
+              aria-label="More submission options"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="submit-menu"
+            >
+              <svg class="ui-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path
+                  d="M3.22 5.72a.75.75 0 0 1 1.06 0L8 9.44l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.22 6.78a.75.75 0 0 1 0-1.06Z"
+                ></path>
+              </svg>
+            </button>
+            <div
+              class="submit-menu"
+              id="submit-menu"
+              role="menu"
+              aria-label="Submission options"
+              hidden
+            >
+              <button
+                class="review-context-item"
+                id="submit-review"
+                type="button"
+                role="menuitem"
+                aria-label="Review queued comments before sending"
+                tabindex="-1"
+              >
+                Review
+              </button>
+            </div>
+          </div>
           <button
             class="icon-button"
             id="theme-toggle"

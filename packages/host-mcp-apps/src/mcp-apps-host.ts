@@ -79,6 +79,32 @@ function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+interface CodexFollowUpMessageOptions {
+  readonly prompt: string;
+  readonly scrollToBottom: boolean;
+}
+
+type CodexFollowUpMessageSender = (options: CodexFollowUpMessageOptions) => unknown;
+
+function getCodexFollowUpMessageSender(hostWindow: Window):
+  | {
+      readonly receiver: object;
+      readonly send: CodexFollowUpMessageSender;
+    }
+  | undefined {
+  try {
+    const openai = Reflect.get(hostWindow, "openai") as unknown;
+    if ((typeof openai !== "object" || openai === null) && typeof openai !== "function") {
+      return undefined;
+    }
+    const send = Reflect.get(openai, "sendFollowUpMessage") as unknown;
+    if (typeof send !== "function") return undefined;
+    return { receiver: openai, send: send as CodexFollowUpMessageSender };
+  } catch {
+    return undefined;
+  }
+}
+
 function unwrapToolPayload<T>(result: ToolPayloadResult<T>): T {
   if (result.success) return result.data;
   const retryable = result.code === "server_error" && result.serverCode === "image_load_failed";
@@ -239,8 +265,24 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
       return connected && context.displayMode === "inline";
     },
     get submission(): boolean {
+      return getCodexFollowUpMessageSender(hostWindow) !== undefined;
+    },
+    get reviewSubmission(): boolean {
       return messages;
     },
+  };
+
+  const formatValidatedSubmission = (submission: ReviewSubmission): string => {
+    return options.submissionFormatter
+      ? options.submissionFormatter(submission)
+      : JSON.stringify(submission);
+  };
+  const sendReviewedSubmission = async (text: string): Promise<void> => {
+    const result = await app.sendMessage({
+      role: "user",
+      content: [{ type: "text", text }],
+    });
+    if (result.isError) throw new Error("The host rejected the review submission");
   };
 
   const ports: MarkdownReviewPorts = {
@@ -290,16 +332,19 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
     },
     submissions: {
       async submit(request) {
-        const submission = ReviewSubmissionSchema.parse(request);
+        const validated = ReviewSubmissionSchema.parse(request);
+        const directSender = getCodexFollowUpMessageSender(hostWindow);
+        if (!directSender) throw new Error("Direct submission is unavailable in this host");
+        const text = formatValidatedSubmission(validated);
+        await Reflect.apply(directSender.send, directSender.receiver, [
+          { prompt: text, scrollToBottom: true },
+        ]);
+      },
+      async review(request) {
+        const validated = ReviewSubmissionSchema.parse(request);
         if (!messages) throw new Error("This MCP Apps host does not accept review submissions");
-        const text = options.submissionFormatter
-          ? options.submissionFormatter(submission)
-          : JSON.stringify(submission);
-        const result = await app.sendMessage({
-          role: "user",
-          content: [{ type: "text", text }],
-        });
-        if (result.isError) throw new Error("The host rejected the review submission");
+        const text = formatValidatedSubmission(validated);
+        await sendReviewedSubmission(text);
       },
     },
     presentation: {

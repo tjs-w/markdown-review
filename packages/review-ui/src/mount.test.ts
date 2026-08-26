@@ -36,7 +36,12 @@ const reviewDocument: ReviewDocument = {
 function installShell(): void {
   document.body.innerHTML = `
     <div class="topbar"><span id="launcher-count"></span><span id="top-count"></span>
-      <button id="review-actions" aria-expanded="false"></button><button id="comments-toggle"></button><button id="send-all" hidden><span id="send-all-label"></span><span id="send-all-count"></span></button>
+      <button id="review-actions" aria-expanded="false"></button><button id="comments-toggle"></button>
+      <div id="submit-actions" hidden>
+        <button id="send-all"><span id="send-all-label"></span><span id="send-all-count"></span></button>
+        <button id="submit-options" aria-haspopup="menu" aria-expanded="false" aria-controls="submit-menu"></button>
+        <div id="submit-menu" role="menu" hidden><button id="submit-review" role="menuitem"></button></div>
+      </div>
       <button id="theme-toggle"></button><button id="refresh"></button></div>
     <span id="launcher-meta"></span>
     <aside id="comments-panel" hidden><button id="close-comments"></button><div id="comments-list"></div></aside>
@@ -94,6 +99,7 @@ interface HarnessOptions {
   readonly recover?: NonNullable<MarkdownReviewPorts["documents"]["recover"]>;
   readonly loadAssetChunk?: MarkdownReviewPorts["documents"]["loadAssetChunk"];
   readonly submit?: (submission: ReviewSubmission) => Promise<void>;
+  readonly review?: (submission: ReviewSubmission) => Promise<void>;
   readonly save?: (snapshot: PersistedReviewState) => Promise<void>;
   readonly openExternal?: (url: URL) => Promise<void>;
   readonly requestDisplayMode?: MarkdownReviewPorts["presentation"]["requestDisplayMode"];
@@ -103,6 +109,7 @@ interface HarnessOptions {
 function createHarness(options: HarnessOptions = {}) {
   const saves: PersistedReviewState[] = [];
   const submissions: ReviewSubmission[] = [];
+  const reviews: ReviewSubmission[] = [];
   const listeners = new Set<HostContextListener>();
   const context = options.context ?? { displayMode: "fullscreen", theme: "light" };
   const ports: MarkdownReviewPorts = {
@@ -116,6 +123,10 @@ function createHarness(options: HarnessOptions = {}) {
       submit(submission) {
         submissions.push(submission);
         return options.submit?.(submission) ?? Promise.resolve();
+      },
+      review(submission) {
+        reviews.push(submission);
+        return options.review?.(submission) ?? Promise.resolve();
       },
     },
     presentation: {
@@ -146,6 +157,7 @@ function createHarness(options: HarnessOptions = {}) {
     ports,
     saves,
     submissions,
+    reviews,
     emitContext(next: HostContext) {
       for (const listener of listeners) listener(next);
     },
@@ -442,6 +454,41 @@ describe("mountMarkdownReview", () => {
     field?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(document.querySelector("[data-review-ui='manual-copy']")).toBeNull();
     expect(document.activeElement).toBe(paragraph.closest(".review-block"));
+    handle.destroy();
+  });
+
+  test("does not submit with the keyboard shortcut while manual copy is modal", async () => {
+    installShell();
+    const harness = createHarness({
+      initialState: persisted([queued({ id: "queued", serial: 1, feedback: "Keep queued" })]),
+      writeClipboard: () => Promise.reject(new Error("clipboard unavailable")),
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    selectText();
+    const paragraph = document.querySelector("#document p");
+    if (!paragraph) throw new Error("Expected review paragraph");
+    openContextMenu(paragraph);
+    document.getElementById("context-copy-selection")?.click();
+    await settle();
+
+    const dialog = document.querySelector<HTMLElement>("[data-review-ui='manual-copy']");
+    expect(dialog?.getAttribute("aria-modal")).toBe("true");
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        metaKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await settle();
+    expect(harness.submissions).toHaveLength(0);
+    expect(document.querySelectorAll("[data-feedback-annotation]")).toHaveLength(1);
+    dialog
+      ?.querySelector<HTMLButtonElement>("button")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     handle.destroy();
   });
 
@@ -852,6 +899,276 @@ describe("mountMarkdownReview", () => {
     handle.destroy();
   });
 
+  test("routes primary Submit directly and the Review menu action through host review", async () => {
+    installShell();
+    const directHarness = createHarness({
+      initialState: persisted([queued({ id: "direct", serial: 1, feedback: "Submit directly" })]),
+    });
+    const directHandle = mountMarkdownReview({
+      ports: directHarness.ports,
+      initialDocument: reviewDocument,
+    });
+    await settle();
+
+    document.getElementById("send-all")?.click();
+    await settle(5);
+    expect(directHarness.submissions).toHaveLength(1);
+    expect(directHarness.reviews).toHaveLength(0);
+    directHandle.destroy();
+
+    installShell();
+    const reviewHarness = createHarness({
+      initialState: persisted([queued({ id: "review", serial: 1, feedback: "Review first" })]),
+    });
+    const reviewHandle = mountMarkdownReview({
+      ports: reviewHarness.ports,
+      initialDocument: reviewDocument,
+    });
+    await settle();
+
+    document.getElementById("submit-options")?.click();
+    document.getElementById("submit-review")?.click();
+    await settle(5);
+    expect(reviewHarness.submissions).toHaveLength(0);
+    expect(reviewHarness.reviews).toHaveLength(1);
+    reviewHandle.destroy();
+  });
+
+  test("retains a rejected reviewed submission and restores disclosure focus for retry", async () => {
+    installShell();
+    let attempts = 0;
+    const harness = createHarness({
+      initialState: persisted([queued({ id: "review", serial: 1, feedback: "Review first" })]),
+      review: () =>
+        ++attempts === 1 ? Promise.reject(new Error("review rejected")) : Promise.resolve(),
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    const options = document.getElementById("submit-options") as HTMLButtonElement;
+
+    options.click();
+    document.getElementById("submit-review")?.click();
+    await settle(5);
+    expect(document.activeElement).toBe(options);
+    expect(document.getElementById("toast-message")?.textContent).toContain("review rejected");
+    expect(document.querySelectorAll("[data-feedback-annotation]")).toHaveLength(1);
+    expect(harness.saves.at(-1)?.queue).toHaveLength(1);
+
+    options.click();
+    document.getElementById("submit-review")?.click();
+    await settle(5);
+    expect(harness.reviews).toHaveLength(2);
+    expect(harness.reviews[1]?.submissionId).toBe(harness.reviews[0]?.submissionId);
+    expect(document.querySelectorAll("[data-feedback-annotation]")).toHaveLength(0);
+    handle.destroy();
+  });
+
+  test("supports the direct-submit shortcut and ignores unsafe shortcut states", async () => {
+    installShell();
+    const harness = createHarness({
+      initialState: persisted([queued({ id: "item-1", serial: 1, feedback: "Ready" })]),
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+
+    const dispatchShortcut = (overrides: KeyboardEventInit = {}): void => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          metaKey: true,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+          ...overrides,
+        }),
+      );
+    };
+    dispatchShortcut({ repeat: true });
+    dispatchShortcut({ isComposing: true });
+    dispatchShortcut({ altKey: true });
+    dispatchShortcut({ shiftKey: false });
+    dispatchShortcut({ metaKey: false, ctrlKey: false });
+    await settle();
+    expect(harness.submissions).toHaveLength(0);
+
+    selectText(1);
+    document.getElementById("selection-action")?.click();
+    dispatchShortcut();
+    await settle();
+    expect(harness.submissions).toHaveLength(0);
+    document.getElementById("close-composer")?.click();
+
+    dispatchShortcut({ metaKey: false, ctrlKey: true });
+    await settle(5);
+    expect(harness.submissions).toHaveLength(1);
+    expect(harness.reviews).toHaveLength(0);
+    handle.destroy();
+
+    installShell();
+    const disabledHarness = createHarness({
+      initialState: persisted([queued({ id: "disabled", serial: 1, feedback: "Queued" })]),
+      capabilities: { documentTools: true, displayMode: true, submission: false },
+    });
+    const disabledHandle = mountMarkdownReview({
+      ports: disabledHarness.ports,
+      initialDocument: reviewDocument,
+    });
+    await settle();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        metaKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await settle();
+    expect(disabledHarness.submissions).toHaveLength(0);
+    disabledHandle.destroy();
+  });
+
+  test("exposes an accessible Review menu and restores focus on dismissal", async () => {
+    installShell();
+    const harness = createHarness({
+      initialState: persisted([queued({ id: "item-1", serial: 1, feedback: "Ready" })]),
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    const options = document.getElementById("submit-options") as HTMLButtonElement;
+    const menu = document.getElementById("submit-menu") as HTMLDivElement;
+    const review = document.getElementById("submit-review") as HTMLButtonElement;
+
+    expect(options.getAttribute("aria-haspopup")).toBe("menu");
+    expect(options.getAttribute("aria-controls")).toBe("submit-menu");
+    options.focus();
+    options.click();
+    expect(options.getAttribute("aria-expanded")).toBe("true");
+    expect(menu.hidden).toBeFalse();
+    expect(menu.getAttribute("role")).toBe("menu");
+    expect(review.getAttribute("role")).toBe("menuitem");
+    expect(document.activeElement).toBe(review);
+    review.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(menu.hidden).toBeTrue();
+    expect(options.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(options);
+
+    options.click();
+    document
+      .getElementById("document")
+      ?.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    expect(menu.hidden).toBeTrue();
+    expect(options.getAttribute("aria-expanded")).toBe("false");
+    handle.destroy();
+  });
+
+  test("shares one in-flight lock across Submit and Review actions", async () => {
+    installShell();
+    let resolveSubmit: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      resolveSubmit = resolve;
+    });
+    const harness = createHarness({
+      initialState: persisted([queued({ id: "item-1", serial: 1, feedback: "Ready" })]),
+      submit: () => pending,
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    const submit = document.getElementById("send-all") as HTMLButtonElement;
+    const options = document.getElementById("submit-options") as HTMLButtonElement;
+    const review = document.getElementById("submit-review") as HTMLButtonElement;
+
+    submit.click();
+    options.click();
+    review.click();
+    await settle();
+    expect(harness.submissions).toHaveLength(1);
+    expect(harness.reviews).toHaveLength(0);
+    expect(submit.disabled).toBeTrue();
+    expect(options.disabled).toBeTrue();
+    expect((document.getElementById("submit-menu") as HTMLDivElement).hidden).toBeTrue();
+    resolveSubmit?.();
+    await settle(6);
+    expect((document.getElementById("submit-actions") as HTMLDivElement).hidden).toBeTrue();
+    handle.destroy();
+  });
+
+  test("preserves a theme change made during an in-flight direct submission", async () => {
+    installShell();
+    let resolveSubmit: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      resolveSubmit = resolve;
+    });
+    const harness = createHarness({
+      initialState: persisted([queued({ id: "item-1", serial: 1, feedback: "Ready" })]),
+      submit: () => pending,
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+
+    document.getElementById("send-all")?.click();
+    await settle();
+    expect(harness.submissions).toHaveLength(1);
+    document.getElementById("theme-toggle")?.click();
+    await settle();
+    expect(document.documentElement.dataset["theme"]).toBe("dark");
+    expect(harness.saves.at(-1)?.theme).toBe("dark");
+
+    resolveSubmit?.();
+    await settle(6);
+    expect(document.documentElement.dataset["theme"]).toBe("dark");
+    expect(harness.saves.at(-1)?.theme).toBe("dark");
+    handle.destroy();
+  });
+
+  test("gates direct and reviewed submission capabilities independently", async () => {
+    installShell();
+    const directOnly = createHarness({
+      initialState: persisted([queued({ id: "direct", serial: 1, feedback: "Direct" })]),
+      capabilities: {
+        documentTools: true,
+        displayMode: true,
+        submission: true,
+        reviewSubmission: false,
+      },
+    });
+    const directHandle = mountMarkdownReview({
+      ports: directOnly.ports,
+      initialDocument: reviewDocument,
+    });
+    await settle();
+    expect((document.getElementById("send-all") as HTMLButtonElement).disabled).toBeFalse();
+    expect((document.getElementById("submit-options") as HTMLButtonElement).hidden).toBeTrue();
+    directHandle.destroy();
+
+    installShell();
+    const reviewOnly = createHarness({
+      initialState: persisted([queued({ id: "review", serial: 1, feedback: "Review" })]),
+      capabilities: {
+        documentTools: true,
+        displayMode: true,
+        submission: false,
+        reviewSubmission: true,
+      },
+    });
+    const reviewHandle = mountMarkdownReview({
+      ports: reviewOnly.ports,
+      initialDocument: reviewDocument,
+    });
+    await settle();
+    const submit = document.getElementById("send-all") as HTMLButtonElement;
+    const options = document.getElementById("submit-options") as HTMLButtonElement;
+    expect(submit.disabled).toBeTrue();
+    expect(options.hidden).toBeFalse();
+    expect(options.disabled).toBeFalse();
+    options.click();
+    document.getElementById("submit-review")?.click();
+    await settle(5);
+    expect(reviewOnly.submissions).toHaveLength(0);
+    expect(reviewOnly.reviews).toHaveLength(1);
+    reviewHandle.destroy();
+  });
+
   test("locks duplicate submit clicks and resets numbering after success", async () => {
     installShell();
     let resolveSubmit: (() => void) | undefined;
@@ -873,7 +1190,7 @@ describe("mountMarkdownReview", () => {
     expect(document.getElementById("send-all-label")?.textContent).toBe("Submitting…");
     resolveSubmit?.();
     await settle(6);
-    expect(submit.hidden).toBeTrue();
+    expect((document.getElementById("submit-actions") as HTMLDivElement).hidden).toBeTrue();
     await queueComment("A fresh round");
     expect(document.querySelector("[data-feedback-annotation]")?.textContent).toBe("1");
     handle.destroy();
