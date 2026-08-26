@@ -5,11 +5,13 @@ import {
   PrivateReviewImageChunkSchema,
   ReviewDocumentSchema,
   ReviewDocumentSummarySchema,
+  ReviewDocumentUpdateStatusSchema,
   ReviewImageChunkSummarySchema,
   type PrivateReviewImageChunk,
   type ReviewDocument,
   type ReviewDocumentRecoveryRequest,
   type ReviewDocumentSummary,
+  type ReviewDocumentUpdateStatus,
   type ReviewImageChunkRequest,
   type ReviewImageChunkSummary,
 } from "@markdown-review/contracts";
@@ -30,6 +32,15 @@ export interface LoadedAssetChunk {
   readonly privateChunk: PrivateReviewImageChunk;
 }
 
+interface MarkdownSnapshot {
+  readonly path: string;
+  readonly bytes: Buffer;
+  readonly markdown: string;
+  readonly revision: string;
+  readonly modifiedAt: string;
+  readonly sizeBytes: number;
+}
+
 export interface MarkdownReviewServiceOptions {
   readonly pathPolicy?: MarkdownPathPolicy;
   readonly sessions?: ReviewSessionStore;
@@ -48,6 +59,24 @@ function summarize(document: ReviewDocument): ReviewDocumentSummary {
   });
 }
 
+async function readMarkdownSnapshot(
+  pathPolicy: MarkdownPathPolicy,
+  pathInput: string,
+): Promise<MarkdownSnapshot> {
+  const path = await pathPolicy.resolveMarkdownPath(pathInput);
+  const snapshot = await readFileHandleBounded(path, MAX_MARKDOWN_BYTES, "The Markdown file", {
+    expectedCanonicalPath: path,
+  });
+  return {
+    path,
+    bytes: snapshot.bytes,
+    markdown: snapshot.bytes.toString("utf8"),
+    revision: createHash("sha256").update(snapshot.bytes).digest("hex").slice(0, 16),
+    modifiedAt: snapshot.modifiedAt,
+    sizeBytes: snapshot.sizeBytes,
+  };
+}
+
 export class MarkdownReviewService {
   readonly #pathPolicy: MarkdownPathPolicy;
   readonly #sessions: ReviewSessionStore;
@@ -58,23 +87,18 @@ export class MarkdownReviewService {
   }
 
   async open(pathInput: string): Promise<OpenedMarkdownReview> {
-    const path = await this.#pathPolicy.resolveMarkdownPath(pathInput);
-    const snapshot = await readFileHandleBounded(path, MAX_MARKDOWN_BYTES, "The Markdown file", {
-      expectedCanonicalPath: path,
-    });
-    const markdown = snapshot.bytes.toString("utf8");
-    const rendered = await renderMarkdown(markdown, path, this.#pathPolicy);
-    const revision = createHash("sha256").update(snapshot.bytes).digest("hex").slice(0, 16);
-    const filename = basename(path);
+    const snapshot = await readMarkdownSnapshot(this.#pathPolicy, pathInput);
+    const rendered = await renderMarkdown(snapshot.markdown, snapshot.path, this.#pathPolicy);
+    const filename = basename(snapshot.path);
     const documentWithoutSession: Omit<ReviewDocument, "reviewSessionId"> = {
       kind: "markdown-review-document",
-      path,
+      path: snapshot.path,
       filename,
       title: rendered.title ?? filename,
-      revision,
+      revision: snapshot.revision,
       modifiedAt: snapshot.modifiedAt,
       sizeBytes: snapshot.sizeBytes,
-      lineCount: markdown.length === 0 ? 0 : markdown.split(/\r?\n/).length,
+      lineCount: snapshot.markdown.length === 0 ? 0 : snapshot.markdown.split(/\r?\n/).length,
       blockCount: rendered.blockCount,
       html: rendered.html,
       images: rendered.images.map((image) => image.descriptor),
@@ -87,6 +111,21 @@ export class MarkdownReviewService {
   async loadDocument(reviewSessionId: string): Promise<OpenedMarkdownReview> {
     const session = this.#sessions.get(reviewSessionId);
     return this.open(session.document.path);
+  }
+
+  async checkDocument(request: ReviewDocumentRecoveryRequest): Promise<ReviewDocumentUpdateStatus> {
+    const session = this.#sessions.get(request.reviewSessionId);
+    if (session.document.path !== request.path || session.document.revision !== request.revision) {
+      throw new Error("The Markdown review update reference did not match the session.");
+    }
+    const snapshot = await readMarkdownSnapshot(this.#pathPolicy, session.document.path);
+    return ReviewDocumentUpdateStatusSchema.parse({
+      kind: "markdown-review-update-status",
+      reviewSessionId: session.id,
+      path: session.document.path,
+      revision: snapshot.revision,
+      changed: snapshot.revision !== session.document.revision,
+    });
   }
 
   async recoverDocument(request: ReviewDocumentRecoveryRequest): Promise<OpenedMarkdownReview> {

@@ -93,12 +93,13 @@ describe("checked-in Node stdio bundle", () => {
       const tools = await client.listTools();
       expect(tools.tools.map((tool) => tool.name)).toEqual([
         "open_markdown_review",
+        "check_markdown_review_document",
         "load_markdown_review_document",
         "recover_markdown_review_document",
         "load_markdown_review_image_chunk",
       ]);
 
-      const resource = await client.readResource({ uri: "ui://markdown-review/v27.html" });
+      const resource = await client.readResource({ uri: "ui://markdown-review/v29.html" });
       const content = resource.contents[0];
       expect(content?.mimeType).toBe("text/html;profile=mcp-app");
       const html = content && "text" in content ? content.text : "";

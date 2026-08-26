@@ -36,7 +36,8 @@ The MCP server is intentionally narrow:
 1. `open_markdown_review` validates and renders an absolute `.md` or `.markdown` path.
 2. Component-only tools hydrate the rendered document and stream approved local raster images in bounded chunks.
 3. The model-visible tool result contains file metadata, not the complete document. The rendered content is delivered privately to the component.
-4. The skill explains how Codex should interpret review feedback and modify the underlying Markdown safely.
+4. While the review remains open, a lightweight private revision check reloads changed Markdown in place and briefly shows `File updated`; Codex does not open another review for the same active path after edits.
+5. The skill explains how Codex should interpret review feedback and modify the underlying Markdown safely.
 
 This separation is the reason the project includes MCP: the server connects a Codex tool invocation to a trusted interactive component. A static HTML file by itself cannot receive the selected source file, return structured review comments to the active task, or maintain this context boundary.
 

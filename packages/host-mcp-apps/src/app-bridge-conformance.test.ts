@@ -10,6 +10,7 @@ import {
   PrivateReviewImageChunkSchema,
   ReviewDocumentSchema,
   ReviewDocumentSummarySchema,
+  ReviewDocumentUpdateStatusSchema,
   ReviewSubmissionSchema,
   type ReviewDocument,
   type ReviewSubmission,
@@ -38,6 +39,14 @@ const laterDocument = ReviewDocumentSchema.parse({
   reviewSessionId: "223e4567-e89b-42d3-a456-426614174000",
   revision: "revision-b",
   title: "Later review",
+});
+
+const changedStatus = ReviewDocumentUpdateStatusSchema.parse({
+  kind: "markdown-review-update-status",
+  reviewSessionId: firstDocument.reviewSessionId,
+  path: firstDocument.path,
+  revision: laterDocument.revision,
+  changed: true,
 });
 
 const submission = ReviewSubmissionSchema.parse({
@@ -205,6 +214,12 @@ describe("official MCP Apps AppBridge conformance", () => {
     expect(capabilities.displayMode).toBe(false);
     expect(
       await rejectionMessage(harness.host.ports.documents.refresh(firstDocument.reviewSessionId)),
+    ).toContain("does not allow component tools");
+    expect(
+      await rejectionMessage(
+        harness.host.ports.documents.checkForUpdate?.(firstDocument) ??
+          Promise.reject(new Error("Missing document-update adapter")),
+      ),
     ).toContain("does not allow component tools");
     expect(
       await rejectionMessage(
@@ -677,6 +692,31 @@ describe("official MCP Apps AppBridge conformance", () => {
       }),
     );
     expect(JSON.stringify(imageChunkSummary)).not.toContain(privateImageData);
+
+    await closeHarness(harness);
+  });
+
+  test("checks the active revision through an app-only tool without loading a document", async () => {
+    const requests: unknown[] = [];
+    const harness = await createHarness({
+      capabilities: { serverTools: {} },
+      onCallTool(params) {
+        requests.push(params);
+        return Promise.resolve({ content: [], structuredContent: changedStatus });
+      },
+    });
+
+    expect(await harness.host.ports.documents.checkForUpdate?.(firstDocument)).toBeTrue();
+    expect(requests).toEqual([
+      expect.objectContaining({
+        name: "check_markdown_review_document",
+        arguments: {
+          reviewSessionId: firstDocument.reviewSessionId,
+          path: firstDocument.path,
+          revision: firstDocument.revision,
+        },
+      }),
+    ]);
 
     await closeHarness(harness);
   });

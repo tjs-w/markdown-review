@@ -42,6 +42,8 @@ import {
 const IMAGE_WORKERS = 2;
 const CHUNK_WORKERS = 4;
 const MAX_QUEUE_ITEMS = 20;
+const DOCUMENT_UPDATE_CHECK_INTERVAL_MS = 3_000;
+const DOCUMENT_UPDATE_NOTICE_MS = 2_400;
 
 interface ActiveSelection extends ReviewSelection {
   readonly block: HTMLElement;
@@ -262,6 +264,20 @@ function sanitizeReviewHtml(root: Document, html: string): DocumentFragment {
         element.setAttribute("align", align);
     }
   }
+  for (const checkbox of template.content.querySelectorAll<HTMLInputElement>(
+    'li > input[type="checkbox"]',
+  )) {
+    checkbox.classList.add("task-checkbox");
+    const item = checkbox.parentElement;
+    if (item?.tagName !== "LI") continue;
+    const taskText = item.textContent.trim().slice(0, 512);
+    checkbox.setAttribute(
+      "aria-label",
+      `${taskText || "Task"} (${checkbox.checked ? "completed" : "not completed"})`,
+    );
+    item.classList.add("task-list-item");
+    if (item.parentElement?.tagName === "UL") item.parentElement.classList.add("task-list");
+  }
   return template.content;
 }
 
@@ -331,6 +347,9 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   #submissionMenuReturnFocus: HTMLElement | null = null;
   #compositionActive = false;
   #toastTimer: ReturnType<typeof setTimeout> | undefined;
+  #documentUpdateCheckTimer: ReturnType<typeof setTimeout> | undefined;
+  #documentUpdateNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+  #documentUpdateCheckInFlight = false;
   #saveChain: Promise<void> = Promise.resolve();
   #documentBusy = false;
   #destroyed = false;
@@ -382,6 +401,9 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       this.#selectionFrame = undefined;
     }
     if (this.#toastTimer !== undefined) clearTimeout(this.#toastTimer);
+    if (this.#documentUpdateCheckTimer !== undefined) clearTimeout(this.#documentUpdateCheckTimer);
+    if (this.#documentUpdateNoticeTimer !== undefined)
+      clearTimeout(this.#documentUpdateNoticeTimer);
     this.#closeManualCopy(false);
   }
 
@@ -409,7 +431,10 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       if (generation !== this.#generation || this.#destroyed) return;
       this.#showLoadError(error);
     } finally {
-      if (generation === this.#generation) this.#setBusy(false);
+      if (generation === this.#generation) {
+        this.#setBusy(false);
+        this.#scheduleDocumentUpdateCheck();
+      }
     }
   }
 
@@ -480,6 +505,17 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     meta.textContent = message;
     meta.classList.toggle("error", error);
     meta.setAttribute("role", error ? "alert" : "status");
+  }
+
+  #showDocumentUpdated(): void {
+    const indicator = this.#element("document-update-indicator");
+    indicator.hidden = false;
+    if (this.#documentUpdateNoticeTimer !== undefined)
+      clearTimeout(this.#documentUpdateNoticeTimer);
+    this.#documentUpdateNoticeTimer = setTimeout(() => {
+      indicator.hidden = true;
+      this.#documentUpdateNoticeTimer = undefined;
+    }, DOCUMENT_UPDATE_NOTICE_MS);
   }
 
   #showLoadError(error: unknown, retry?: () => void): void {
@@ -2485,6 +2521,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       return;
     }
     const draft = this.#captureComposerDraft();
+    const commentsOpen = !this.#element("comments-panel").hidden;
     this.#closeManualCopy(false);
     this.#generation = Math.max(this.#generation, generation);
     this.#decodedImages.clear();
@@ -2512,13 +2549,13 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       surface.replaceChildren(empty);
     }
     this.#prepareLocalImages(reviewDocument);
-    this.#closeCommentsPanel(false);
     if (this.#round.persisted.path !== reviewDocument.path) {
       this.#round = createReviewRoundState(
         normalizePersistedReviewState(null, new Date().toISOString()),
       );
     }
     this.#renderQueueCards();
+    this.#setCommentsPanelOpen(commentsOpen);
     if (draft) this.#restoreComposerDraft(draft, reviewDocument);
     void this.#installLocalImages(reviewDocument, this.#generation);
     this.#requestDefaultFullscreen(reviewDocument);
@@ -2606,6 +2643,78 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       promise,
     };
     return promise;
+  }
+
+  #scheduleDocumentUpdateCheck(): void {
+    if (this.#documentUpdateCheckTimer !== undefined) {
+      clearTimeout(this.#documentUpdateCheckTimer);
+      this.#documentUpdateCheckTimer = undefined;
+    }
+    if (
+      this.#destroyed ||
+      !this.#document ||
+      typeof this.#ports.documents.checkForUpdate !== "function" ||
+      this.#ports.presentation.capabilities.documentTools === false
+    ) {
+      return;
+    }
+    this.#documentUpdateCheckTimer = setTimeout(() => {
+      this.#documentUpdateCheckTimer = undefined;
+      void this.#checkForDocumentUpdate().finally(() => {
+        this.#scheduleDocumentUpdateCheck();
+      });
+    }, DOCUMENT_UPDATE_CHECK_INTERVAL_MS);
+  }
+
+  async #checkForDocumentUpdate(): Promise<void> {
+    const reviewDocument = this.#document;
+    const checkForUpdate = this.#ports.documents.checkForUpdate?.bind(this.#ports.documents);
+    if (
+      !reviewDocument ||
+      !checkForUpdate ||
+      this.#destroyed ||
+      this.#root.visibilityState === "hidden" ||
+      this.#documentBusy ||
+      this.#documentUpdateCheckInFlight ||
+      this.#activeLoad !== null ||
+      this.#activeRecovery !== null ||
+      this.#sendingIds.size > 0
+    ) {
+      return;
+    }
+    const generation = this.#generation;
+    this.#documentUpdateCheckInFlight = true;
+    try {
+      const changed = await checkForUpdate({
+        reviewSessionId: reviewDocument.reviewSessionId,
+        path: reviewDocument.path,
+        revision: reviewDocument.revision,
+      });
+      if (
+        !changed ||
+        this.#destroyed ||
+        generation !== this.#generation ||
+        this.#document?.reviewSessionId !== reviewDocument.reviewSessionId
+      ) {
+        return;
+      }
+      this.#setBusy(true);
+      const refreshed = await this.#ports.documents.refresh(reviewDocument.reviewSessionId);
+      if (this.#destroyed || generation !== this.#generation) return;
+      if (refreshed.path !== reviewDocument.path) {
+        throw new Error("The refreshed review did not match the open Markdown file");
+      }
+      const revisionChanged = refreshed.revision !== reviewDocument.revision;
+      this.#renderDocument(refreshed, ++this.#generation);
+      if (revisionChanged) this.#showDocumentUpdated();
+    } catch (error) {
+      if (this.#destroyed || generation !== this.#generation) return;
+      if (isExpiredSessionError(error)) await this.#recoverExpiredSession();
+      // Transient background checks stay silent and retry on the next interval.
+    } finally {
+      this.#documentUpdateCheckInFlight = false;
+      if (!this.#destroyed && this.#activeRecovery === null) this.#setBusy(false);
+    }
   }
 
   async #refreshDocument(): Promise<boolean> {
@@ -3138,6 +3247,20 @@ class MarkdownReviewController implements MarkdownReviewHandle {
             loaded ? "Reloaded from the .md file." : "The last good review is still shown.",
           );
         });
+      },
+      { signal },
+    );
+    this.#view.addEventListener(
+      "focus",
+      () => {
+        void this.#checkForDocumentUpdate();
+      },
+      { signal },
+    );
+    this.#root.addEventListener(
+      "visibilitychange",
+      () => {
+        if (this.#root.visibilityState !== "hidden") void this.#checkForDocumentUpdate();
       },
       { signal },
     );

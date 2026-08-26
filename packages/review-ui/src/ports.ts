@@ -79,6 +79,7 @@ export type HostContextListener = (context: HostContext) => void;
 
 export interface DocumentPort {
   refresh(reviewSessionId: string): Promise<ReviewDocument>;
+  checkForUpdate?(document: DocumentRef): Promise<boolean>;
   recover?(document: DocumentRef): Promise<ReviewDocument>;
   loadAssetChunk(request: ReviewImageChunkRequest): Promise<PrivateReviewImageChunk>;
 }

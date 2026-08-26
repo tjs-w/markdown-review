@@ -3,7 +3,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { ReviewDocument, ReviewDocumentSummary } from "@markdown-review/contracts";
+import type {
+  ReviewDocument,
+  ReviewDocumentSummary,
+  ReviewDocumentUpdateStatus,
+} from "@markdown-review/contracts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
@@ -49,6 +53,13 @@ const recoveredDocument: ReviewDocument = {
   reviewSessionId: recoveredReviewSessionId,
 };
 const recoveredOpened: OpenedMarkdownReview = { summary, document: recoveredDocument };
+const unchangedStatus: ReviewDocumentUpdateStatus = {
+  kind: "markdown-review-update-status",
+  reviewSessionId,
+  path: summary.path,
+  revision: summary.revision,
+  changed: false,
+};
 const chunkRequest = {
   reviewSessionId,
   revision: summary.revision,
@@ -80,6 +91,7 @@ function toolVisibility(value: unknown): unknown {
 
 describe("createMarkdownReviewServer", () => {
   test("preserves the public summary and keeps session data app-private", async () => {
+    let documentCheckError: Error | undefined;
     let documentLoadError: Error | undefined;
     let recoveryRequest: unknown;
     let recoveryError: Error | undefined;
@@ -91,6 +103,10 @@ describe("createMarkdownReviewServer", () => {
       loadDocument(): Promise<OpenedMarkdownReview> {
         if (documentLoadError) return Promise.reject(documentLoadError);
         return Promise.resolve(opened);
+      },
+      checkDocument(): Promise<ReviewDocumentUpdateStatus> {
+        if (documentCheckError) return Promise.reject(documentCheckError);
+        return Promise.resolve(unchangedStatus);
       },
       recoverDocument(request: unknown): Promise<OpenedMarkdownReview> {
         recoveryRequest = request;
@@ -122,6 +138,7 @@ describe("createMarkdownReviewServer", () => {
       const tools = await client.listTools();
       expect(tools.tools.map((tool) => tool.name)).toEqual([
         "open_markdown_review",
+        "check_markdown_review_document",
         "load_markdown_review_document",
         "recover_markdown_review_document",
         "load_markdown_review_image_chunk",
@@ -129,6 +146,7 @@ describe("createMarkdownReviewServer", () => {
       expect(toolVisibility(tools.tools[1]?._meta)).toEqual(["app"]);
       expect(toolVisibility(tools.tools[2]?._meta)).toEqual(["app"]);
       expect(toolVisibility(tools.tools[3]?._meta)).toEqual(["app"]);
+      expect(toolVisibility(tools.tools[4]?._meta)).toEqual(["app"]);
       const resources = await client.listResources();
       expect(resources.resources[0]?._meta?.["ui"]).toEqual({
         prefersBorder: true,
@@ -143,6 +161,35 @@ describe("createMarkdownReviewServer", () => {
       expect(result.structuredContent).toEqual(summary);
       expect(JSON.stringify(result.structuredContent)).not.toContain(reviewSessionId);
       expect(result._meta?.["document"]).toEqual(document);
+
+      const checked = await client.callTool({
+        name: "check_markdown_review_document",
+        arguments: {
+          reviewSessionId,
+          path: summary.path,
+          revision: summary.revision,
+        },
+      });
+      expect(checked.structuredContent).toEqual(unchangedStatus);
+      expect(checked.content).toEqual([]);
+      expect(checked._meta).toBeUndefined();
+
+      documentCheckError = new Error("Sensitive update detail: /Users/example/private.md");
+      const failedCheck = await client.callTool({
+        name: "check_markdown_review_document",
+        arguments: {
+          reviewSessionId,
+          path: summary.path,
+          revision: summary.revision,
+        },
+      });
+      expect(failedCheck.isError).toBeTrue();
+      expect(failedCheck.content).toEqual([
+        { type: "text", text: "The Markdown review document could not be loaded." },
+      ]);
+      expect(failedCheck._meta).toBeUndefined();
+      expect(JSON.stringify(failedCheck)).not.toContain("/Users/example/private.md");
+      documentCheckError = undefined;
 
       documentLoadError = new Error("Sensitive document detail: /Users/example/private.md");
       const failedRefresh = await client.callTool({

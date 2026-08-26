@@ -2,8 +2,10 @@ import {
   ErrorReviewDocumentSchema,
   ReviewDocumentRecoveryRequestSchema,
   ReviewDocumentSummarySchema,
+  ReviewDocumentUpdateStatusSchema,
   ReviewImageChunkRequestSchema,
   ReviewImageChunkSummarySchema,
+  type ReviewDocumentUpdateStatus,
 } from "@markdown-review/contracts";
 import {
   MarkdownReviewService,
@@ -20,15 +22,18 @@ import { z } from "zod";
 
 import type { ReviewUiAssetLoader } from "./assets.js";
 
-export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v27.html";
+export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v29.html";
 const REVIEW_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
 
 const SERVER_INSTRUCTIONS =
-  "Use open_markdown_review only to render an absolute .md or .markdown path. The Markdown file is canonical. Review comments have stable #N serials within one queued review round and may reference earlier queued comments by serial; treat #N as a reference only when the feedback payload explicitly lists it as one, because literal #N text is supported. The component submits the full queue as one batch, clears it after a successful submission, and restarts numbering at #1. Discuss question-only items without editing, apply explicit change requests with normal filesystem tools, then reopen the review after any edits.";
+  "Use open_markdown_review only to render an absolute .md or .markdown path. The Markdown file is canonical. Reuse an existing review for the same path in the current task: the active component detects source revisions and refreshes itself, so do not call open_markdown_review again after edits unless the prior review is unavailable. Review comments have stable #N serials within one queued review round and may reference earlier queued comments by serial; treat #N as a reference only when the feedback payload explicitly lists it as one, because literal #N text is supported. The component submits the full queue as one batch, clears it after a successful submission, and restarts numbering at #1. Discuss question-only items without editing and apply explicit change requests with normal filesystem tools.";
 
 export interface MarkdownReviewBackend {
   open(path: string): Promise<OpenedMarkdownReview>;
   loadDocument(reviewSessionId: string): Promise<OpenedMarkdownReview>;
+  checkDocument?(
+    request: z.infer<typeof ReviewDocumentRecoveryRequestSchema>,
+  ): Promise<ReviewDocumentUpdateStatus>;
   recoverDocument?(
     request: z.infer<typeof ReviewDocumentRecoveryRequestSchema>,
   ): Promise<OpenedMarkdownReview>;
@@ -87,6 +92,17 @@ function safeDocumentLoadError(error: unknown): string {
   return message === "The Markdown review session is unavailable or expired; reopen the review."
     ? message
     : "The Markdown review document could not be loaded.";
+}
+
+function documentLoadErrorMetadata(
+  error: unknown,
+):
+  | { readonly reviewError: { readonly code: "session_expired"; readonly message: string } }
+  | undefined {
+  const message = errorMessage(error);
+  return message === "The Markdown review session is unavailable or expired; reopen the review."
+    ? { reviewError: { code: "session_expired", message } }
+    : undefined;
 }
 
 export function createMarkdownReviewServer(options: CreateMarkdownReviewServerOptions): McpServer {
@@ -200,6 +216,52 @@ export function createMarkdownReviewServer(options: CreateMarkdownReviewServerOp
 
   registerAppTool(
     server,
+    "check_markdown_review_document",
+    {
+      title: "Check Markdown review document",
+      description:
+        "Check whether the canonical Markdown source changed for an active review session without creating a new rendered snapshot. This read-only tool is available only to the component UI.",
+      inputSchema: ReviewDocumentRecoveryRequestSchema.shape,
+      outputSchema: ReviewDocumentUpdateStatusSchema.shape,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+        idempotentHint: true,
+      },
+      _meta: {
+        ui: { visibility: ["app"] },
+        "openai/visibility": "private",
+        "openai/widgetAccessible": true,
+      },
+    },
+    async (request) => {
+      try {
+        if (!backend.checkDocument) {
+          throw new Error("Document update checks are unavailable for this Markdown review host.");
+        }
+        const status = await backend.checkDocument(request);
+        if (
+          status.reviewSessionId !== request.reviewSessionId ||
+          status.path !== request.path ||
+          status.changed !== (status.revision !== request.revision)
+        ) {
+          throw new Error("The Markdown review host returned an invalid update status.");
+        }
+        return { structuredContent: status, content: [] };
+      } catch (error: unknown) {
+        const message = safeDocumentLoadError(error);
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: message }],
+          _meta: documentLoadErrorMetadata(error),
+        };
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "load_markdown_review_document",
     {
       title: "Load Markdown review document",
@@ -240,6 +302,7 @@ export function createMarkdownReviewServer(options: CreateMarkdownReviewServerOp
               reviewSessionId,
               error: message,
             }),
+            ...(documentLoadErrorMetadata(error) ?? {}),
           },
         };
       }

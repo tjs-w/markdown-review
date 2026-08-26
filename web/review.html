@@ -207,6 +207,34 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+      .identity-meta-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+      .identity-meta-row .meta {
+        min-width: 0;
+      }
+      .document-update-indicator {
+        display: inline-flex;
+        flex: 0 0 auto;
+        align-items: center;
+        min-height: 16px;
+        padding: 0 5px;
+        border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+        color: var(--accent);
+        font-size: 9px;
+        font-weight: 650;
+        letter-spacing: 0.01em;
+        line-height: 1;
+        white-space: nowrap;
+      }
+      .document-update-indicator[hidden] {
+        display: none;
+      }
       h1.title {
         margin: 0;
         font-size: 14px;
@@ -483,6 +511,31 @@
       }
       .markdown li + li {
         margin-top: 0.25em;
+      }
+      .markdown .task-list-item {
+        list-style: none;
+      }
+      .markdown .task-checkbox {
+        width: 14px;
+        height: 14px;
+        margin: 0 0.45em 0 -1.5em;
+        border: 1px solid var(--control-line);
+        border-radius: 3px;
+        -webkit-appearance: none;
+        appearance: none;
+        background-color: var(--paper);
+        cursor: default;
+        opacity: 1;
+        pointer-events: none;
+        vertical-align: -0.12em;
+      }
+      .markdown .task-checkbox:checked {
+        border-color: var(--accent);
+        background-color: var(--accent);
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='white' stroke-linecap='round' stroke-linejoin='round' stroke-width='2.25' d='m3.5 8.5 2.75 2.75 6.25-6.5'/%3E%3C/svg%3E");
+        background-position: center;
+        background-repeat: no-repeat;
+        background-size: 0.78em 0.78em;
       }
       .markdown a {
         color: var(--accent);
@@ -1249,6 +1302,13 @@
         .identity {
           display: none;
         }
+        .document-update-indicator {
+          position: absolute;
+          top: calc(100% + 6px);
+          left: 8px;
+          z-index: 1;
+          box-shadow: 0 2px 8px color-mix(in srgb, var(--ink) 12%, transparent);
+        }
         .review-help {
           display: none;
         }
@@ -1358,6 +1418,11 @@
           background: ButtonFace;
           color: ButtonText;
         }
+        .markdown .task-checkbox {
+          -webkit-appearance: auto;
+          appearance: auto;
+          accent-color: Highlight;
+        }
       }
     </style>
   </head>
@@ -1395,10 +1460,21 @@
       <header class="topbar">
         <div class="identity">
           <h1 class="title" id="title">Markdown Review</h1>
-          <div class="meta" id="meta" role="status" aria-live="polite">
-            Waiting for the document…
+          <div class="identity-meta-row">
+            <div class="meta" id="meta" role="status" aria-live="polite">
+              Waiting for the document…
+            </div>
           </div>
         </div>
+        <span
+          class="document-update-indicator"
+          id="document-update-indicator"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          hidden
+          >File updated</span
+        >
         <div class="actions">
           <div class="review-help">
             <button

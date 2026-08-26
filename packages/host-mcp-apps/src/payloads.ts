@@ -2,9 +2,11 @@ import {
   PrivateReviewImageChunkSchema,
   ReviewDocumentSchema,
   ReviewDocumentSummarySchema,
+  ReviewDocumentUpdateStatusSchema,
   ReviewImageChunkSummarySchema,
   type PrivateReviewImageChunk,
   type ReviewDocument,
+  type ReviewDocumentUpdateStatus,
 } from "@markdown-review/contracts";
 import type { ReviewPortErrorCode, ReviewServerErrorCode } from "@markdown-review/review-ui";
 
@@ -193,6 +195,24 @@ export function parseReviewDocumentToolResult(value: unknown): ToolPayloadResult
     };
   }
   return { success: true, data: parsedDocument.data };
+}
+
+export function parseReviewDocumentUpdateToolResult(
+  value: unknown,
+): ToolPayloadResult<ReviewDocumentUpdateStatus> {
+  const parsedResult = parseCallToolResult(value);
+  if (!parsedResult.success) return parsedResult;
+  const parsedStatus = ReviewDocumentUpdateStatusSchema.safeParse(
+    parsedResult.result["structuredContent"],
+  );
+  if (!parsedStatus.success) {
+    return {
+      success: false,
+      code: "host_contract_mismatch",
+      message: "The document update response was invalid.",
+    };
+  }
+  return { success: true, data: parsedStatus.data };
 }
 
 export function parsePrivateImageChunkToolResult(

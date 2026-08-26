@@ -58,6 +58,21 @@ describe("MarkdownReviewService", () => {
     expect(Buffer.concat(chunks)).toEqual(ONE_PIXEL_PNG);
   });
 
+  test("renders GFM task-list state as disabled checkboxes", async () => {
+    const paths = await fixture();
+    await writeFile(
+      paths.markdown,
+      "# Tasks\n\n- [ ] Pending task\n- [x] Completed task\n- Ordinary list item\n",
+    );
+    const service = new MarkdownReviewService();
+    const opened = await service.open(paths.markdown);
+
+    expect(opened.document.html.match(/type="checkbox"/g)).toHaveLength(2);
+    expect(opened.document.html.match(/disabled/g)).toHaveLength(2);
+    expect(opened.document.html.match(/checked/g)).toHaveLength(1);
+    expect(opened.document.html).toContain("Ordinary list item");
+  });
+
   test("binds private document and image access to the session and revision", async () => {
     const paths = await fixture();
     const service = new MarkdownReviewService();
@@ -83,6 +98,33 @@ describe("MarkdownReviewService", () => {
         chunkIndex: 0,
       }),
     ).toThrow(/Markdown changed/);
+  });
+
+  test("checks for source revisions without creating another rendered session", async () => {
+    const paths = await fixture();
+    const service = new MarkdownReviewService();
+    const opened = await service.open(paths.markdown);
+    const reference = {
+      reviewSessionId: opened.document.reviewSessionId,
+      path: opened.document.path,
+      revision: opened.document.revision,
+    };
+
+    expect(await service.checkDocument(reference)).toEqual({
+      kind: "markdown-review-update-status",
+      ...reference,
+      changed: false,
+    });
+
+    await writeFile(paths.markdown, "# Updated review\n\nLatest source.\n");
+    const changed = await service.checkDocument(reference);
+    expect(changed.changed).toBeTrue();
+    expect(changed.revision).not.toBe(reference.revision);
+    expect(changed.reviewSessionId).toBe(reference.reviewSessionId);
+
+    const refreshed = await service.loadDocument(reference.reviewSessionId);
+    expect(refreshed.document.revision).toBe(changed.revision);
+    expect(refreshed.document.html).toContain("Latest source");
   });
 
   test("recovers a fresh immutable snapshot after the original server loses its session", async () => {

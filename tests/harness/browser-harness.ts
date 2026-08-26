@@ -41,7 +41,7 @@ if (process.argv[2] === "--generated-fixture") {
   );
   await writeFile(
     markdownPath,
-    "# Markdown Review Fixture\n\nSelect and review this paragraph.\n\n## Images\n\n![PNG pixel](fixture.png)\n\n![JPEG pixel](fixture.jpg)\n\n![WebP pixel](fixture.webp)\n",
+    "# Markdown Review Fixture\n\nSelect and review this paragraph.\n\n## Images\n\n![PNG pixel](fixture.png)\n\n![JPEG pixel](fixture.jpg)\n\n![WebP pixel](fixture.webp)\n\n## Tasks\n\n- [ ] Pending task\n- [x] Completed task\n- Ordinary list item\n",
   );
 } else {
   markdownPath = resolve(process.argv[2] ?? resolve(pluginRoot, "scripts/fixture.md"));
@@ -56,7 +56,7 @@ const transport = new StdioClientTransport({
 const client = new Client({ name: "markdown-review-browser-harness", version: "0.1.0" });
 await client.connect(transport);
 
-const resource = await client.readResource({ uri: "ui://markdown-review/v27.html" });
+const resource = await client.readResource({ uri: "ui://markdown-review/v29.html" });
 const resourceContent = resource.contents[0];
 if (!resourceContent || !("text" in resourceContent)) {
   throw new Error("The Markdown Review HTML resource was not returned");
@@ -79,6 +79,28 @@ const hostScript = `<script>
   const initialResult = ${safeJson(opened)};
   const query = new URLSearchParams(window.location.search);
   const reviewDocument = initialResult._meta.document;
+  const updatedReviewDocument = {
+    ...reviewDocument,
+    reviewSessionId: "323e4567-e89b-42d3-a456-426614174000",
+    revision: "browser-latest-revision",
+    title: "Markdown Review Fixture",
+    images: [],
+    html: reviewDocument.html.replace(
+      "Select and review this paragraph.",
+      "Latest source revision is visible."
+    )
+  };
+  const updatedResult = {
+    ...initialResult,
+    structuredContent: {
+      ...initialResult.structuredContent,
+      revision: updatedReviewDocument.revision
+    },
+    _meta: {
+      ...initialResult._meta,
+      document: updatedReviewDocument
+    }
+  };
   const seededWidgetState = query.get("seed") === "1"
     ? {
         privateContent: {
@@ -112,7 +134,8 @@ const hostScript = `<script>
     toolResults: [],
     clipboardWrites: [],
     widgetState: seededWidgetState,
-    setWidgetStateCalls: 0
+    setWidgetStateCalls: 0,
+    documentUpdateAvailable: false
   };
   window.openai = {
     sendFollowUpMessage(request) {
@@ -197,12 +220,37 @@ const hostScript = `<script>
       }
       if (request.method === "tools/call") {
         state.toolCalls.push(request.params);
-        const response = await fetch("/call", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(request.params)
-        });
-        result = await response.json();
+        if (
+          query.get("auto-update") === "1" &&
+          request.params.name === "check_markdown_review_document"
+        ) {
+          const document = request.params.arguments;
+          const changed = state.documentUpdateAvailable === true &&
+            document.revision === reviewDocument.revision;
+          result = {
+            content: [],
+            structuredContent: {
+              kind: "markdown-review-update-status",
+              reviewSessionId: document.reviewSessionId,
+              path: document.path,
+              revision: changed ? updatedReviewDocument.revision : document.revision,
+              changed
+            }
+          };
+        } else if (
+          query.get("auto-update") === "1" &&
+          request.params.name === "load_markdown_review_document"
+        ) {
+          state.documentUpdateAvailable = false;
+          result = updatedResult;
+        } else {
+          const response = await fetch("/call", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(request.params)
+          });
+          result = await response.json();
+        }
         state.toolResults.push(result);
       } else if (request.method === "ui/message") {
         state.messages.push(request.params);

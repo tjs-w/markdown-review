@@ -39483,6 +39483,11 @@ var ReviewDocumentIdentitySchema = external_exports.object({
 var ReviewDocumentRecoveryRequestSchema = ReviewDocumentIdentitySchema.extend({
   reviewSessionId: external_exports.uuid()
 }).strict();
+var ReviewDocumentUpdateStatusSchema = ReviewDocumentIdentitySchema.extend({
+  kind: external_exports.literal("markdown-review-update-status"),
+  reviewSessionId: external_exports.uuid(),
+  changed: external_exports.boolean()
+}).strict();
 var ReviewDocumentSummarySchema = ReviewDocumentIdentitySchema.extend({
   filename: external_exports.string().min(1).max(MAX_PATH_LENGTH),
   title: external_exports.string().min(1).max(MAX_DOCUMENT_TITLE_LENGTH),
@@ -41557,6 +41562,20 @@ function summarize(document2) {
     blockCount: document2.blockCount
   });
 }
+async function readMarkdownSnapshot(pathPolicy, pathInput) {
+  const path = await pathPolicy.resolveMarkdownPath(pathInput);
+  const snapshot = await readFileHandleBounded(path, MAX_MARKDOWN_BYTES, "The Markdown file", {
+    expectedCanonicalPath: path
+  });
+  return {
+    path,
+    bytes: snapshot.bytes,
+    markdown: snapshot.bytes.toString("utf8"),
+    revision: (0, import_node_crypto3.createHash)("sha256").update(snapshot.bytes).digest("hex").slice(0, 16),
+    modifiedAt: snapshot.modifiedAt,
+    sizeBytes: snapshot.sizeBytes
+  };
+}
 var MarkdownReviewService = class {
   #pathPolicy;
   #sessions;
@@ -41565,23 +41584,18 @@ var MarkdownReviewService = class {
     this.#sessions = options.sessions ?? new ReviewSessionStore();
   }
   async open(pathInput) {
-    const path = await this.#pathPolicy.resolveMarkdownPath(pathInput);
-    const snapshot = await readFileHandleBounded(path, MAX_MARKDOWN_BYTES, "The Markdown file", {
-      expectedCanonicalPath: path
-    });
-    const markdown = snapshot.bytes.toString("utf8");
-    const rendered = await renderMarkdown(markdown, path, this.#pathPolicy);
-    const revision = (0, import_node_crypto3.createHash)("sha256").update(snapshot.bytes).digest("hex").slice(0, 16);
-    const filename = (0, import_node_path3.basename)(path);
+    const snapshot = await readMarkdownSnapshot(this.#pathPolicy, pathInput);
+    const rendered = await renderMarkdown(snapshot.markdown, snapshot.path, this.#pathPolicy);
+    const filename = (0, import_node_path3.basename)(snapshot.path);
     const documentWithoutSession = {
       kind: "markdown-review-document",
-      path,
+      path: snapshot.path,
       filename,
       title: rendered.title ?? filename,
-      revision,
+      revision: snapshot.revision,
       modifiedAt: snapshot.modifiedAt,
       sizeBytes: snapshot.sizeBytes,
-      lineCount: markdown.length === 0 ? 0 : markdown.split(/\r?\n/).length,
+      lineCount: snapshot.markdown.length === 0 ? 0 : snapshot.markdown.split(/\r?\n/).length,
       blockCount: rendered.blockCount,
       html: rendered.html,
       images: rendered.images.map((image) => image.descriptor)
@@ -41593,6 +41607,20 @@ var MarkdownReviewService = class {
   async loadDocument(reviewSessionId) {
     const session = this.#sessions.get(reviewSessionId);
     return this.open(session.document.path);
+  }
+  async checkDocument(request) {
+    const session = this.#sessions.get(request.reviewSessionId);
+    if (session.document.path !== request.path || session.document.revision !== request.revision) {
+      throw new Error("The Markdown review update reference did not match the session.");
+    }
+    const snapshot = await readMarkdownSnapshot(this.#pathPolicy, session.document.path);
+    return ReviewDocumentUpdateStatusSchema.parse({
+      kind: "markdown-review-update-status",
+      reviewSessionId: session.id,
+      path: session.document.path,
+      revision: snapshot.revision,
+      changed: snapshot.revision !== session.document.revision
+    });
   }
   async recoverDocument(request) {
     try {
@@ -51216,9 +51244,9 @@ var EMPTY_COMPLETION_RESULT = {
 };
 
 // packages/mcp-server/src/server.ts
-var MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v27.html";
+var MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v29.html";
 var REVIEW_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
-var SERVER_INSTRUCTIONS = "Use open_markdown_review only to render an absolute .md or .markdown path. The Markdown file is canonical. Review comments have stable #N serials within one queued review round and may reference earlier queued comments by serial; treat #N as a reference only when the feedback payload explicitly lists it as one, because literal #N text is supported. The component submits the full queue as one batch, clears it after a successful submission, and restarts numbering at #1. Discuss question-only items without editing, apply explicit change requests with normal filesystem tools, then reopen the review after any edits.";
+var SERVER_INSTRUCTIONS = "Use open_markdown_review only to render an absolute .md or .markdown path. The Markdown file is canonical. Reuse an existing review for the same path in the current task: the active component detects source revisions and refreshes itself, so do not call open_markdown_review again after edits unless the prior review is unavailable. Review comments have stable #N serials within one queued review round and may reference earlier queued comments by serial; treat #N as a reference only when the feedback payload explicitly lists it as one, because literal #N text is supported. The component submits the full queue as one batch, clears it after a successful submission, and restarts numbering at #1. Discuss question-only items without editing and apply explicit change requests with normal filesystem tools.";
 function developerModeEnabled(value) {
   return value === "1";
 }
@@ -51247,6 +51275,10 @@ function classifyImageLoadError(error51) {
 function safeDocumentLoadError(error51) {
   const message = errorMessage(error51);
   return message === "The Markdown review session is unavailable or expired; reopen the review." ? message : "The Markdown review document could not be loaded.";
+}
+function documentLoadErrorMetadata(error51) {
+  const message = errorMessage(error51);
+  return message === "The Markdown review session is unavailable or expired; reopen the review." ? { reviewError: { code: "session_expired", message } } : void 0;
 }
 function createMarkdownReviewServer(options) {
   const backend = options.backend ?? new MarkdownReviewService();
@@ -51352,6 +51384,46 @@ function createMarkdownReviewServer(options) {
   );
   K3(
     server2,
+    "check_markdown_review_document",
+    {
+      title: "Check Markdown review document",
+      description: "Check whether the canonical Markdown source changed for an active review session without creating a new rendered snapshot. This read-only tool is available only to the component UI.",
+      inputSchema: ReviewDocumentRecoveryRequestSchema.shape,
+      outputSchema: ReviewDocumentUpdateStatusSchema.shape,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+        idempotentHint: true
+      },
+      _meta: {
+        ui: { visibility: ["app"] },
+        "openai/visibility": "private",
+        "openai/widgetAccessible": true
+      }
+    },
+    async (request) => {
+      try {
+        if (!backend.checkDocument) {
+          throw new Error("Document update checks are unavailable for this Markdown review host.");
+        }
+        const status = await backend.checkDocument(request);
+        if (status.reviewSessionId !== request.reviewSessionId || status.path !== request.path || status.changed !== (status.revision !== request.revision)) {
+          throw new Error("The Markdown review host returned an invalid update status.");
+        }
+        return { structuredContent: status, content: [] };
+      } catch (error51) {
+        const message = safeDocumentLoadError(error51);
+        return {
+          isError: true,
+          content: [{ type: "text", text: message }],
+          _meta: documentLoadErrorMetadata(error51)
+        };
+      }
+    }
+  );
+  K3(
+    server2,
     "load_markdown_review_document",
     {
       title: "Load Markdown review document",
@@ -51390,7 +51462,8 @@ function createMarkdownReviewServer(options) {
               kind: "markdown-review-document",
               reviewSessionId,
               error: message
-            })
+            }),
+            ...documentLoadErrorMetadata(error51) ?? {}
           }
         };
       }

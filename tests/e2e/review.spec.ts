@@ -274,6 +274,51 @@ test("retains reviewed feedback and restores disclosure focus when the host reje
   expect(submissionCounts).toEqual({ direct: 0, reviewed: 1 });
 });
 
+test("refreshes one active review to the latest revision with a tiny update notice", async ({
+  page,
+}) => {
+  await page.goto("/?auto-update=1");
+  await expect(page.getByText("Select and review this paragraph.", { exact: true })).toBeVisible();
+  await queueFirstParagraph(page, "Keep this queued across the source update");
+  await page.locator("#comments-toggle").click();
+  await expect(page.locator("#comments-panel")).toBeVisible();
+
+  await page.evaluate(() => {
+    const host = (
+      window as Window & {
+        __markdownReviewHost?: { documentUpdateAvailable: boolean };
+      }
+    ).__markdownReviewHost;
+    if (!host) throw new Error("Expected the Markdown Review browser host");
+    host.documentUpdateAvailable = true;
+    window.dispatchEvent(new Event("focus"));
+  });
+
+  const updateNotice = page.locator("#document-update-indicator");
+  await Promise.all([
+    expect(page.getByText("Latest source revision is visible.", { exact: true })).toBeVisible(),
+    expect(page.locator("#meta")).toContainText("rev browser-latest-revision"),
+    expect(updateNotice).toBeVisible(),
+  ]);
+  await expect(updateNotice).toHaveText("File updated");
+  expect(
+    await updateNotice.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
+  ).toBeLessThanOrEqual(10);
+  await expect(page.locator("#comments-panel")).toBeVisible();
+  await expect(page.locator("[data-feedback-annotation]")).toHaveCount(1);
+
+  const updateCalls = await page.evaluate(() => {
+    const host = (
+      window as Window & {
+        __markdownReviewHost?: { toolCalls: { name?: string }[] };
+      }
+    ).__markdownReviewHost;
+    return (host?.toolCalls ?? []).map((call) => call.name);
+  });
+  expect(updateCalls.filter((name) => name === "check_markdown_review_document").length).toBe(1);
+  expect(updateCalls.filter((name) => name === "load_markdown_review_document").length).toBe(1);
+});
+
 test("keeps the selection action at the directional endpoint through scrolling and reflow", async ({
   page,
   isMobile,
@@ -624,6 +669,48 @@ test("renders PNG, JPEG, and static WebP without network access and passes axe",
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
     .analyze();
   expect(darkResults.violations).toEqual([]);
+});
+
+test("renders task-list checkboxes without duplicate bullets", async ({ page }) => {
+  const taskItems = page.locator("#document li.task-list-item");
+  const checkboxes = page.locator("#document input.task-checkbox");
+  const ordinaryItem = page.getByText("Ordinary list item", { exact: true });
+
+  await expect(taskItems).toHaveCount(2);
+  await expect(checkboxes).toHaveCount(2);
+  await expect(checkboxes.nth(0)).toBeDisabled();
+  await expect(checkboxes.nth(0)).not.toBeChecked();
+  await expect(checkboxes.nth(0)).toHaveAccessibleName("Pending task (not completed)");
+  await expect(checkboxes.nth(1)).toBeDisabled();
+  await expect(checkboxes.nth(1)).toBeChecked();
+  await expect(checkboxes.nth(1)).toHaveAccessibleName("Completed task (completed)");
+  await expect(ordinaryItem).not.toHaveClass(/task-list-item/);
+
+  const styles = await page.evaluate(() => {
+    const taskItem = document.querySelector<HTMLElement>("#document li.task-list-item");
+    const checkbox = document.querySelector<HTMLInputElement>("#document input.task-checkbox");
+    const ordinary = [...document.querySelectorAll<HTMLElement>("#document li")].find(
+      (item) => item.textContent.trim() === "Ordinary list item",
+    );
+    if (!taskItem || !checkbox || !ordinary) throw new Error("Expected task-list fixture");
+    const taskStyle = getComputedStyle(taskItem);
+    const checkboxStyle = getComputedStyle(checkbox);
+    const ordinaryStyle = getComputedStyle(ordinary);
+    return {
+      taskMarker: taskStyle.listStyleType,
+      ordinaryMarker: ordinaryStyle.listStyleType,
+      checkboxWidth: Number.parseFloat(checkboxStyle.width),
+      checkboxHeight: Number.parseFloat(checkboxStyle.height),
+      checkboxBorder: checkboxStyle.borderStyle,
+      pointerEvents: checkboxStyle.pointerEvents,
+    };
+  });
+  expect(styles.taskMarker).toBe("none");
+  expect(styles.ordinaryMarker).not.toBe("none");
+  expect(styles.checkboxWidth).toBeGreaterThanOrEqual(14);
+  expect(styles.checkboxHeight).toBeGreaterThanOrEqual(14);
+  expect(styles.checkboxBorder).toBe("solid");
+  expect(styles.pointerEvents).toBe("none");
 });
 
 test("reveals the image feedback affordance only at the bottom-right interaction point", async ({

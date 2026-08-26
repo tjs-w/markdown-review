@@ -9,6 +9,7 @@ import {
   ReviewBatchV1Schema,
   ReviewDocumentSchema,
   ReviewDocumentRecoveryRequestSchema,
+  ReviewDocumentUpdateStatusSchema,
   ReviewImageDescriptorSchema,
   ReviewImageMimeTypeSchema,
   ReviewSelectionSchema,
@@ -27,6 +28,23 @@ describe("portable review contracts", () => {
       ReviewDocumentRecoveryRequestSchema.safeParse({ ...request, path: undefined }).success,
     ).toBe(false);
     expect(ReviewDocumentRecoveryRequestSchema.safeParse({ ...request, extra: true }).success).toBe(
+      false,
+    );
+  });
+
+  test("binds update checks to one active document session", () => {
+    const status = {
+      kind: "markdown-review-update-status" as const,
+      reviewSessionId: "8707d8a0-b84e-4a46-98e1-68ca135945de",
+      path: "/tmp/review.md",
+      revision: "r2",
+      changed: true,
+    };
+    expect(ReviewDocumentUpdateStatusSchema.parse(status)).toEqual(status);
+    expect(ReviewDocumentUpdateStatusSchema.safeParse({ ...status, changed: "yes" }).success).toBe(
+      false,
+    );
+    expect(ReviewDocumentUpdateStatusSchema.safeParse({ ...status, extra: true }).success).toBe(
       false,
     );
   });

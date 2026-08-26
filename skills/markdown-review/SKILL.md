@@ -10,14 +10,14 @@ Keep the `.md` or `.markdown` file as the only canonical document. The review co
 ## Open a review
 
 1. Resolve the requested Markdown file to an absolute path. If the user has not named a file, identify the likely target from the workspace before asking.
-2. Call `open_markdown_review` with that absolute path.
+2. If that canonical path already has an available review in the current task, reuse it; the active component checks for source revisions and refreshes itself. Otherwise, call `open_markdown_review` with that absolute path.
 3. Briefly tell the user that the review opens fullscreen. They can select and copy normally, then use the selection's `+` action to queue an inline comment.
 
 The tool is deliberately small. Its model-visible result contains only file metadata; the complete rendered document is delivered privately to the component so it does not consume the conversation context.
 
 ## Open automatically after Markdown writes
 
-After Codex creates or materially edits a local `.md` or `.markdown` file as a user-facing deliverable, call `open_markdown_review` for that absolute path after the source is written and verified. This is the default handoff even when the user did not separately ask for a preview.
+After Codex creates a local `.md` or `.markdown` file as a user-facing deliverable, call `open_markdown_review` for that absolute path after the source is written and verified. After materially editing a file that already has an available review in the current task, do not open another review: the existing component updates to the newest source revision in place and briefly shows `File updated`. Reopen only when no active review exists or the prior review is unavailable. This is the default handoff even when the user did not separately ask for a preview.
 
 Skip the automatic review only when the user explicitly declines it, the Markdown change is incidental machine-maintained metadata rather than a document, or the task is intentionally non-interactive. Do not create an HTML preview as an intermediate step.
 
@@ -40,6 +40,6 @@ If the message explicitly requests an edit:
 2. If its content no longer matches the supplied revision, relocate the passage using the quote and nearby structure; treat old line numbers as a hint.
 3. Edit the underlying Markdown directly. Preserve unrelated content, Markdown structure, reference definitions, and deliberate formatting.
 4. Verify the requested change in the source.
-5. Call `open_markdown_review` again with the same absolute path so the user receives a refreshed rendered review.
+5. Leave the existing review open so its revision monitor refreshes the rendered source in place. Call `open_markdown_review` only if the prior review is unavailable.
 
 Do not create an HTML mirror, write changes through the MCP server, or replace the Markdown file with rendered output.

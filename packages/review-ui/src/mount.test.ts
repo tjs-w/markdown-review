@@ -58,7 +58,7 @@ function installShell(): void {
       <button id="composer-help-toggle"></button><div id="composer-help-popover" hidden></div>
       <span id="line-pill"></span><blockquote id="quote"></blockquote><textarea id="feedback"></textarea>
       <p id="feedback-message"></p><button id="add-queue"><span id="add-queue-label"></span></button></section>
-    <p id="meta"></p><h1 id="title"></h1><h1 id="launcher-title"></h1>
+    <p id="meta"></p><span id="document-update-indicator" hidden>File updated</span><h1 id="title"></h1><h1 id="launcher-title"></h1>
     <div id="toast"><span id="toast-message"></span><button id="toast-action" hidden></button></div><div id="selection-status"></div>`;
 }
 
@@ -96,6 +96,7 @@ interface HarnessOptions {
   readonly capabilities?: MarkdownReviewPorts["presentation"]["capabilities"];
   readonly context?: HostContext;
   readonly refresh?: (reviewSessionId: string) => Promise<ReviewDocument>;
+  readonly checkForUpdate?: NonNullable<MarkdownReviewPorts["documents"]["checkForUpdate"]>;
   readonly recover?: NonNullable<MarkdownReviewPorts["documents"]["recover"]>;
   readonly loadAssetChunk?: MarkdownReviewPorts["documents"]["loadAssetChunk"];
   readonly submit?: (submission: ReviewSubmission) => Promise<void>;
@@ -115,6 +116,7 @@ function createHarness(options: HarnessOptions = {}) {
   const ports: MarkdownReviewPorts = {
     documents: {
       refresh: options.refresh ?? (() => Promise.resolve(reviewDocument)),
+      ...(options.checkForUpdate ? { checkForUpdate: options.checkForUpdate } : {}),
       ...(options.recover ? { recover: options.recover } : {}),
       loadAssetChunk:
         options.loadAssetChunk ?? (() => Promise.reject(new Error("No images in fixture"))),
@@ -262,6 +264,56 @@ describe("mountMarkdownReview", () => {
     expect(link?.getAttribute("href")).toBeNull();
     link?.click();
     expect(document.getElementById("toast-message")?.textContent).toContain("not available");
+    handle.destroy();
+  });
+
+  test("normalizes task-list checkboxes without changing ordinary list markers", async () => {
+    installShell();
+    const taskDocument: ReviewDocument = {
+      ...reviewDocument,
+      html:
+        '<section class="review-block" data-start-line="1" data-end-line="4"><ul>' +
+        '<li><input type="radio" onclick="alert(1)">Pending task</li>' +
+        '<li><input type="checkbox" checked>Completed task</li>' +
+        "<li>Ordinary list item</li></ul></section>",
+    };
+    const harness = createHarness();
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: taskDocument });
+    await settle();
+
+    const list = document.querySelector<HTMLUListElement>("#document ul");
+    const items = document.querySelectorAll<HTMLLIElement>("#document li");
+    const checkboxes = document.querySelectorAll<HTMLInputElement>("#document input");
+    expect(list?.classList.contains("task-list")).toBeTrue();
+    expect(items[0]?.classList.contains("task-list-item")).toBeTrue();
+    expect(items[1]?.classList.contains("task-list-item")).toBeTrue();
+    expect(items[2]?.classList.contains("task-list-item")).toBeFalse();
+    expect(checkboxes).toHaveLength(2);
+    expect(
+      [...checkboxes].map((checkbox) => ({
+        ariaLabel: checkbox.getAttribute("aria-label"),
+        checked: checkbox.checked,
+        disabled: checkbox.disabled,
+        className: checkbox.className,
+        type: checkbox.type,
+      })),
+    ).toEqual([
+      {
+        ariaLabel: "Pending task (not completed)",
+        checked: false,
+        disabled: true,
+        className: "task-checkbox",
+        type: "checkbox",
+      },
+      {
+        ariaLabel: "Completed task (completed)",
+        checked: true,
+        disabled: true,
+        className: "task-checkbox",
+        type: "checkbox",
+      },
+    ]);
+    expect(checkboxes[0]?.hasAttribute("onclick")).toBeFalse();
     handle.destroy();
   });
 
@@ -1468,6 +1520,50 @@ describe("mountMarkdownReview", () => {
     expect(document.querySelector("#document .empty")?.textContent).toContain("empty");
     handle.showError(new Error("host error"));
     expect(document.getElementById("meta")?.textContent).toContain("host error");
+    handle.destroy();
+  });
+
+  test("updates one active review in place and shows a tiny source-update notice", async () => {
+    installShell();
+    let checks = 0;
+    let refreshes = 0;
+    const nextDocument: ReviewDocument = {
+      ...reviewDocument,
+      reviewSessionId: "223e4567-e89b-42d3-a456-426614174000",
+      revision: "latest-revision",
+      html: reviewDocument.html.replace("First paragraph", "Latest first paragraph"),
+    };
+    const harness = createHarness({
+      initialState: persisted([
+        queued({ id: "feedback-1", serial: 1, feedback: "Keep this queued" }),
+      ]),
+      checkForUpdate(document) {
+        checks += 1;
+        return Promise.resolve(document.revision === reviewDocument.revision);
+      },
+      refresh(reviewSessionId) {
+        refreshes += 1;
+        expect(reviewSessionId).toBe(reviewDocument.reviewSessionId);
+        return Promise.resolve(nextDocument);
+      },
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    document.getElementById("comments-toggle")?.click();
+    expect(document.getElementById("comments-panel")?.hidden).toBeFalse();
+
+    window.dispatchEvent(new Event("focus"));
+    await settle(8);
+
+    expect(checks).toBeGreaterThanOrEqual(1);
+    expect(refreshes).toBe(1);
+    expect(document.getElementById("meta")?.textContent).toContain("rev latest-revision");
+    expect(document.getElementById("document-update-indicator")?.hidden).toBeFalse();
+    expect(document.getElementById("document-update-indicator")?.textContent).toContain(
+      "File updated",
+    );
+    expect(document.getElementById("comments-panel")?.hidden).toBeFalse();
+    expect(document.querySelectorAll("[data-feedback-annotation]")).toHaveLength(1);
     handle.destroy();
   });
 

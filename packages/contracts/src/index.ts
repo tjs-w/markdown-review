@@ -57,6 +57,12 @@ export const ReviewDocumentRecoveryRequestSchema = ReviewDocumentIdentitySchema.
   reviewSessionId: z.uuid(),
 }).strict();
 
+export const ReviewDocumentUpdateStatusSchema = ReviewDocumentIdentitySchema.extend({
+  kind: z.literal("markdown-review-update-status"),
+  reviewSessionId: z.uuid(),
+  changed: z.boolean(),
+}).strict();
+
 export const ReviewDocumentSummarySchema = ReviewDocumentIdentitySchema.extend({
   filename: z.string().min(1).max(MAX_PATH_LENGTH),
   title: z.string().min(1).max(MAX_DOCUMENT_TITLE_LENGTH),
@@ -285,6 +291,7 @@ export const PersistedReviewStateSchema = z
 
 export type ReviewDocumentIdentity = z.infer<typeof ReviewDocumentIdentitySchema>;
 export type ReviewDocumentRecoveryRequest = z.infer<typeof ReviewDocumentRecoveryRequestSchema>;
+export type ReviewDocumentUpdateStatus = z.infer<typeof ReviewDocumentUpdateStatusSchema>;
 export type ReviewDocumentSummary = z.infer<typeof ReviewDocumentSummarySchema>;
 export type ReviewImageDescriptor = z.infer<typeof ReviewImageDescriptorSchema>;
 export type ReviewImageMimeType = z.infer<typeof ReviewImageMimeTypeSchema>;

@@ -8,6 +8,7 @@ import {
   PrivateReviewImageChunkSchema,
   ReviewDocumentSchema,
   ReviewDocumentRecoveryRequestSchema,
+  ReviewDocumentUpdateStatusSchema,
   ReviewImageChunkRequestSchema,
   ReviewSubmissionSchema,
   type ReviewDocument,
@@ -24,6 +25,7 @@ import {
   findReviewDocument,
   parsePrivateImageChunkToolResult,
   parseReviewDocumentToolResult,
+  parseReviewDocumentUpdateToolResult,
   type ToolPayloadResult,
 } from "./payloads";
 import { createReviewStateStore } from "./state-store";
@@ -287,6 +289,34 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
 
   const ports: MarkdownReviewPorts = {
     documents: {
+      async checkForUpdate(document) {
+        if (!serverTools) throw new Error("This MCP Apps host does not allow component tools");
+        const request = ReviewDocumentRecoveryRequestSchema.parse({
+          reviewSessionId: document.reviewSessionId,
+          path: document.path,
+          revision: document.revision,
+        });
+        return callComponentTool(async () => {
+          const result = await app.callServerTool({
+            name: "check_markdown_review_document",
+            arguments: request,
+          });
+          const status = ReviewDocumentUpdateStatusSchema.parse(
+            unwrapToolPayload(parseReviewDocumentUpdateToolResult(result)),
+          );
+          if (
+            status.reviewSessionId !== request.reviewSessionId ||
+            status.path !== request.path ||
+            status.changed !== (status.revision !== request.revision)
+          ) {
+            throw new ReviewPortError(
+              "summary_mismatch",
+              "The document update response did not match the active review.",
+            );
+          }
+          return status.changed;
+        });
+      },
       async refresh(reviewSessionId) {
         if (!serverTools) throw new Error("This MCP Apps host does not allow component tools");
         return callComponentTool(async () => {
