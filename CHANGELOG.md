@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added local, theme-aware Mermaid rendering for fenced `mermaid` blocks in the `ui://flowzone/v2.html` shell, while preserving expandable canonical source and enforcing strict Mermaid configuration, no event binding, offline CSP, isolated SVG styles, stale-render cancellation, and per-diagram/document-wide complexity limits. The complete renderer stays inside the single offline app resource, whose measured build budget is now 4 MiB.
 - Replaced plugin-owned model tools with one schema-driven `flowzone` router backed by an immutable startup registry; Markdown Review now uses the `markdown-review/open` route while retaining its typed app-only helpers and review wire contracts.
 - Added in-process, fixed allowlisted CLI/script, and fixed HTTPS executor contracts with bounded input/output, safe errors, cancellation, progress, timeouts, idempotent-only retries, concurrency limits, circuit breaking, command/file identity checks, runtime credentials, and no redirect following.
 - Introduced shared FlowZone request/result/UI/error contracts and the `ui://flowzone/v1.html` universal shell with a fixed view registry, closed CSP, and a temporary v30 Markdown resource/private-metadata compatibility bridge.

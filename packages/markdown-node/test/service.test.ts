@@ -73,6 +73,20 @@ describe("MarkdownReviewService", () => {
     expect(opened.document.html).toContain("Ordinary list item");
   });
 
+  test("preserves fenced Mermaid source for the browser renderer", async () => {
+    const paths = await fixture();
+    await writeFile(
+      paths.markdown,
+      "# Diagram\n\n```mermaid\nflowchart LR\n  A[Draft] --> B[Done]\n```\n",
+    );
+    const service = new MarkdownReviewService();
+    const opened = await service.open(paths.markdown);
+
+    expect(opened.document.html).toContain('<code class="language-mermaid">');
+    expect(opened.document.html).toContain("A[Draft] --&gt; B[Done]");
+    expect(opened.document.html).not.toContain("<svg");
+  });
+
   test("binds private document and image access to the session and revision", async () => {
     const paths = await fixture();
     const service = new MarkdownReviewService();

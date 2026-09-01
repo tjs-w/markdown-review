@@ -4,6 +4,7 @@ import type {
   MarkdownReviewHandle,
   MarkdownReviewPorts,
   MountMarkdownReviewOptions,
+  ReviewDiagramRenderer,
   ReviewImageDecoder,
 } from "@markdown-review/review-ui";
 
@@ -39,6 +40,7 @@ describe("browser composition runtime", () => {
     const imageDecoder: ReviewImageDecoder = {
       decode: () => Promise.resolve({ width: 1, height: 1, data: new Uint8ClampedArray(4) }),
     };
+    const diagramRenderer = {} as ReviewDiagramRenderer;
     let hostOptions: McpAppsHostOptions | undefined;
     let connectCount = 0;
     let closeCount = 0;
@@ -92,6 +94,7 @@ describe("browser composition runtime", () => {
         hostWindow,
         createHost,
         imageDecoder,
+        diagramRenderer,
         mount,
         allowNativeDevTools: true,
       });
@@ -124,6 +127,7 @@ describe("browser composition runtime", () => {
       );
       expect(mountOptions?.ports).toBe(ports);
       expect(mountOptions?.allowNativeDevTools).toBe(true);
+      expect(mountOptions?.diagramRenderer).toBe(diagramRenderer);
       expect(hostOptions?.submissionFormatter).toBeUndefined();
       expect((await mountOptions?.imageDecoder?.decode(new Uint8Array(), "image/png"))?.width).toBe(
         1,

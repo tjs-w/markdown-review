@@ -14,6 +14,7 @@ FlowZone is a local-first MCP plugin host. It exposes one MCP server endpoint an
 - A review queue that submits all comments together to avoid conflicting edits.
 - References between queued comments using `#N`; write `\#N` or `` `#N` `` for literal text.
 - Relative local PNG, JPEG, and static WebP rendering with bounded, private chunk transport.
+- Local Mermaid rendering for fenced `mermaid` blocks, with theme-aware diagrams and expandable canonical source.
 - Automatic review after Codex creates or materially edits a Markdown document.
 
 The Markdown source is always canonical. The component is a read-only review surface; only Codex edits the source file with its normal filesystem tools.
@@ -29,7 +30,7 @@ FlowZone McpServer
        │      └── static plugin registry
        │              └── markdown-review/open
        ├── typed app-only component tools
-       └── ui://flowzone/v1.html
+       └── ui://flowzone/v2.html
 ```
 
 FlowZone exposes exactly one model-visible `flowzone` tool. Its startup-built union schema enumerates the registered plugin/action/input combinations, and the router validates both the selected input and plugin-owned output. Router annotations remain conservative because actions can have different risk. Typed plugin helpers used by the UI stay separate and are forcibly registered with `_meta.ui.visibility: ["app"]`.
@@ -164,6 +165,7 @@ Then restart the desktop app and install the plugin from the local marketplace s
 - The component cannot write the Markdown file.
 - The native browser context menu is suppressed inside the plugin unless the local MCP server starts with the explicit developer flag; this is UI hardening, not a security boundary around Codex App's own menus or shortcuts.
 - Rendered HTML is sanitized before it reaches the component.
+- Mermaid runs only in the bundled browser view with strict security settings, no interaction binding, a second SVG allowlist pass, and a per-diagram shadow root that contains retained diagram styles. Per-diagram and document-wide source bytes, output bytes, elements, edges, dimensions, and UI wait time are bounded; stale queued renders are cancelled, and external links, resources, focus traps, filters, and active SVG content are removed. The original fenced source remains canonical and selectable, and stays disclosed when it owns a comment.
 - Remote, absolute, and out-of-directory images are not loaded.
 - Only relative paths to PNG, JPEG (`.jpg`/`.jpeg`), and static WebP files inside the Markdown file's directory are supported. The server verifies extension, signature, bounded container structure, dimensions, and animation policy before the browser performs native decoding. GIF, AVIF, SVG, APNG, and animated WebP are not rendered.
 - The component resource declares no network or remote resource domains and requests only clipboard-write access for the explicit **Copy selected text** action.
@@ -209,6 +211,8 @@ Review only files you intend to expose to the local FlowZone process. Submitted 
 **The side panel is blank.** Run `bun run verify` in the plugin checkout, rebuild with `bun run build`, refresh the marketplace installation, and retry in a new task.
 
 **A local image does not render.** Use a relative `.png`, `.jpg`, `.jpeg`, or static `.webp` path located inside the Markdown file's directory and confirm it is within the documented size and dimension limits.
+
+**A Mermaid diagram does not render.** Use a fenced `mermaid` code block with valid Mermaid syntax. Expand **Mermaid source** to inspect it; invalid, oversized, or unusually complex diagrams stay visible as source instead of running unbounded browser work.
 
 ## Documentation
 

@@ -41,7 +41,7 @@ if (process.argv[2] === "--generated-fixture") {
   );
   await writeFile(
     markdownPath,
-    "# Markdown Review Fixture\n\nSelect and review this paragraph.\n\n## Images\n\n![PNG pixel](fixture.png)\n\n![JPEG pixel](fixture.jpg)\n\n![WebP pixel](fixture.webp)\n\n## Tasks\n\n- [ ] Pending task\n- [x] Completed task\n- Ordinary list item\n",
+    "# Markdown Review Fixture\n\nSelect and review this paragraph.\n\n## Images\n\n![PNG pixel](fixture.png)\n\n![JPEG pixel](fixture.jpg)\n\n![WebP pixel](fixture.webp)\n\n## Tasks\n\n- [ ] Pending task\n- [x] Completed task\n- Ordinary list item\n\n## Mermaid\n\n```mermaid\nflowchart LR\n  A[Draft] --> B{Review}\n  B -->|Approve| C[Done]\n```\n",
   );
 } else {
   markdownPath = resolve(process.argv[2] ?? resolve(pluginRoot, "scripts/fixture.md"));
@@ -56,7 +56,7 @@ const transport = new StdioClientTransport({
 const client = new Client({ name: "flowzone-browser-harness", version: "0.1.0" });
 await client.connect(transport);
 
-const resource = await client.readResource({ uri: "ui://flowzone/v1.html" });
+const resource = await client.readResource({ uri: "ui://flowzone/v2.html" });
 const resourceContent = resource.contents[0];
 if (!resourceContent || !("text" in resourceContent)) {
   throw new Error("The Markdown Review HTML resource was not returned");

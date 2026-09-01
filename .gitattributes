@@ -1,0 +1,3 @@
+# Deterministic generated bundle; upstream Mermaid shader/template literals contain
+# significant trailing spaces, so do not apply source whitespace checks or line merges.
+web/dist/flowzone.js binary

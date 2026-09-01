@@ -3,17 +3,20 @@ import { ReviewDocumentSchema } from "@markdown-review/contracts";
 import {
   mountMarkdownReview,
   type MarkdownReviewHandle,
+  type ReviewDiagramRenderer,
   type ReviewImageDecoder,
 } from "@markdown-review/review-ui";
 
 import { createBrowserImageDecoder } from "./browser-image-decoder";
 import { createMcpAppsHost, type McpAppsHostOptions } from "./mcp-apps-host";
+import { createMermaidRenderer } from "./mermaid-renderer";
 import { createFlowZoneViewRegistry } from "./view-registry";
 
 export interface BrowserRuntimeDependencies {
   readonly hostWindow?: Window;
   readonly createHost?: typeof createMcpAppsHost;
   readonly imageDecoder?: ReviewImageDecoder;
+  readonly diagramRenderer?: ReviewDiagramRenderer;
   readonly mount?: typeof mountMarkdownReview;
   readonly submissionFormatter?: McpAppsHostOptions["submissionFormatter"];
   readonly allowNativeDevTools?: boolean;
@@ -34,6 +37,7 @@ export function startFlowZoneRuntime(
   let reviewDestroyed = false;
   let reconnect: () => void = () => undefined;
   const imageDecoder = dependencies.imageDecoder ?? createBrowserImageDecoder(hostWindow);
+  const diagramRenderer = dependencies.diagramRenderer ?? createMermaidRenderer(hostWindow);
   const views = createFlowZoneViewRegistry(
     [
       {
@@ -96,6 +100,7 @@ export function startFlowZoneRuntime(
   const handle = mount({
     ports: host.ports,
     imageDecoder,
+    diagramRenderer,
     allowNativeDevTools: dependencies.allowNativeDevTools === true,
   });
   reviewRef.current = handle;

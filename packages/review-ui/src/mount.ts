@@ -42,6 +42,11 @@ import {
 const IMAGE_WORKERS = 2;
 const CHUNK_WORKERS = 4;
 const MAX_QUEUE_ITEMS = 20;
+const MAX_MERMAID_DIAGRAMS = 12;
+const MAX_MERMAID_SOURCE_BYTES = 32 * 1024;
+const MAX_MERMAID_TOTAL_SOURCE_BYTES = 128 * 1024;
+const MAX_MERMAID_TOTAL_OUTPUT_BYTES = 4 * 1024 * 1024;
+const MAX_MERMAID_TOTAL_ELEMENTS = 20_000;
 const DOCUMENT_UPDATE_CHECK_INTERVAL_MS = 3_000;
 
 interface ActiveSelection extends ReviewSelection {
@@ -310,6 +315,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   readonly #view: Window & typeof globalThis;
   readonly #ports: MountMarkdownReviewOptions["ports"];
   readonly #imageDecoder: MountMarkdownReviewOptions["imageDecoder"];
+  readonly #diagramRenderer: MountMarkdownReviewOptions["diagramRenderer"];
   readonly #allowNativeDevTools: boolean;
   #document: ReviewDocument | null = null;
   #lastGoodDocument: ReviewDocument | null = null;
@@ -331,6 +337,9 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   #editingId: string | null = null;
   #selectionRevision: string | null = null;
   #generation = 0;
+  #diagramRun = 0;
+  #diagramAbort: AbortController | null = null;
+  #diagramRenderScheduled = false;
   #renderKey: string | null = null;
   #activeLoad: ActiveLoad | null = null;
   #activeRecovery: ActiveRecovery | null = null;
@@ -360,6 +369,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#view = this.#root.defaultView ?? window;
     this.#ports = options.ports;
     this.#imageDecoder = options.imageDecoder;
+    this.#diagramRenderer = options.diagramRenderer;
     this.#allowNativeDevTools = options.allowNativeDevTools === true;
     this.#round = createReviewRoundState(
       normalizePersistedReviewState(null, new Date().toISOString()),
@@ -388,6 +398,9 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     if (this.#destroyed) return;
     this.#destroyed = true;
     this.#generation += 1;
+    this.#diagramRun += 1;
+    this.#diagramAbort?.abort();
+    this.#diagramAbort = null;
     this.#abort.abort();
     this.#decodedImages.clear();
     this.#unsubscribePresentation();
@@ -612,12 +625,23 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   }
 
   #applyTheme(theme: ReviewTheme): void {
+    const changed = this.#root.documentElement.dataset["theme"] !== theme;
     this.#root.documentElement.dataset["theme"] = theme;
     const toggle = this.#element<HTMLButtonElement>("theme-toggle");
     const useDark = theme === "light";
     toggle.title = useDark ? "Use dark theme" : "Use light theme";
     toggle.setAttribute("aria-label", toggle.title);
     toggle.setAttribute("aria-pressed", String(theme === "dark"));
+    if (changed && this.#document && !this.#destroyed) this.#scheduleMermaidRender();
+  }
+
+  #scheduleMermaidRender(): void {
+    if (this.#diagramRenderScheduled) return;
+    this.#diagramRenderScheduled = true;
+    queueMicrotask(() => {
+      this.#diagramRenderScheduled = false;
+      if (!this.#destroyed) void this.#installMermaidDiagrams(this.#generation);
+    });
   }
 
   #syncSurfaceLayout(): void {
@@ -2199,6 +2223,174 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     }
   }
 
+  #setMermaidError(wrapper: HTMLElement, message: string): void {
+    const output = wrapper.querySelector<HTMLElement>(".mermaid-render");
+    const source = wrapper.querySelector<HTMLDetailsElement>(".mermaid-source");
+    if (!output || !source) return;
+    const status = this.#root.createElement("span");
+    status.className = "mermaid-status";
+    status.textContent = message;
+    output.replaceChildren(status);
+    output.classList.remove("is-loading", "is-ready");
+    output.classList.add("is-error");
+    output.removeAttribute("aria-busy");
+    output.setAttribute("role", "alert");
+    source.open = true;
+  }
+
+  #prepareMermaidDiagrams(): void {
+    this.#diagramRun += 1;
+    this.#diagramAbort?.abort();
+    this.#diagramAbort = null;
+    const surface = this.#element("document");
+    const codeBlocks = [...surface.querySelectorAll<HTMLElement>("pre > code")].filter((code) =>
+      [...code.classList].some((token) => token.toLowerCase() === "language-mermaid"),
+    );
+    let totalBytes = 0;
+    for (const [index, code] of codeBlocks.entries()) {
+      const pre = code.parentElement;
+      if (!pre || pre.tagName !== "PRE" || pre.closest("[data-review-ui]")) continue;
+      for (const token of [...code.classList]) {
+        if (token.toLowerCase() === "language-mermaid") code.classList.remove(token);
+      }
+      code.classList.add("language-mermaid");
+      const sourceBytes = new TextEncoder().encode(code.textContent ?? "").byteLength;
+      totalBytes += sourceBytes;
+      const wrapper = this.#root.createElement("div");
+      wrapper.className = "mermaid-diagram";
+      const output = this.#root.createElement("div");
+      output.className = "mermaid-render is-loading";
+      output.dataset["reviewUi"] = "mermaid";
+      output.setAttribute("aria-busy", "true");
+      output.setAttribute("role", "status");
+      const status = this.#root.createElement("span");
+      status.className = "mermaid-status";
+      status.textContent = "Rendering Mermaid diagram…";
+      output.appendChild(status);
+      const details = this.#root.createElement("details");
+      details.className = "mermaid-source";
+      details.open = true;
+      const summary = this.#root.createElement("summary");
+      summary.dataset["reviewUi"] = "mermaid-source-toggle";
+      summary.textContent = "Mermaid source";
+      pre.replaceWith(wrapper);
+      details.append(summary, pre);
+      wrapper.append(output, details);
+      if (index >= MAX_MERMAID_DIAGRAMS) {
+        this.#setMermaidError(
+          wrapper,
+          `This review renders up to ${MAX_MERMAID_DIAGRAMS} Mermaid diagrams.`,
+        );
+      } else if (sourceBytes > MAX_MERMAID_SOURCE_BYTES) {
+        this.#setMermaidError(wrapper, "This Mermaid diagram exceeds the 32 KiB source limit.");
+      } else if (totalBytes > MAX_MERMAID_TOTAL_SOURCE_BYTES) {
+        this.#setMermaidError(
+          wrapper,
+          "The Mermaid diagrams in this review exceed the 128 KiB total source limit.",
+        );
+      } else if (!this.#diagramRenderer) {
+        this.#setMermaidError(wrapper, "Mermaid rendering is unavailable in this host.");
+      } else {
+        // Keep the source collapsed before the asynchronous render completes so
+        // success does not cause a late layout shift that can disturb an active
+        // native selection or context-menu focus. A user-opened source remains
+        // open, and failures disclose it through #setMermaidError.
+        details.open = false;
+        wrapper.dataset["mermaidApproved"] = "true";
+      }
+    }
+  }
+
+  async #installMermaidDiagrams(generation: number): Promise<void> {
+    const renderer = this.#diagramRenderer;
+    if (!renderer || this.#destroyed) return;
+    this.#diagramAbort?.abort();
+    const abort = new AbortController();
+    this.#diagramAbort = abort;
+    const run = ++this.#diagramRun;
+    const wrappers = [
+      ...this.#element("document").querySelectorAll<HTMLElement>('[data-mermaid-approved="true"]'),
+    ];
+    let totalBytes = 0;
+    let totalElements = 0;
+    for (const [index, wrapper] of wrappers.entries()) {
+      if (generation !== this.#generation || run !== this.#diagramRun || this.#destroyed) return;
+      const output = wrapper.querySelector<HTMLElement>(".mermaid-render");
+      const details = wrapper.querySelector<HTMLDetailsElement>(".mermaid-source");
+      const code = details?.querySelector<HTMLElement>("pre > code.language-mermaid");
+      if (!output || !details || !code) continue;
+      output.classList.add("is-loading");
+      output.classList.remove("is-error");
+      output.setAttribute("aria-busy", "true");
+      const preserveSourceDisclosure = details.open;
+      try {
+        const block = wrapper.closest<HTMLElement>(".review-block");
+        const startLine = block?.dataset["startLine"];
+        const endLine = block?.dataset["endLine"];
+        const lineDescription =
+          startLine && endLine
+            ? startLine === endLine
+              ? `, line ${startLine}`
+              : `, lines ${startLine}–${endLine}`
+            : "";
+        const rendered = await renderer.render(code.textContent ?? "", {
+          id: `flowzone-mermaid-${generation}-${run}-${index + 1}`,
+          theme: this.#currentTheme(),
+          accessibleLabel: `Mermaid diagram${lineDescription}`,
+          signal: abort.signal,
+        });
+        if (
+          generation !== this.#generation ||
+          run !== this.#diagramRun ||
+          this.#destroyed ||
+          !wrapper.isConnected
+        ) {
+          return;
+        }
+        if (
+          totalBytes + rendered.byteLength > MAX_MERMAID_TOTAL_OUTPUT_BYTES ||
+          totalElements + rendered.elementCount > MAX_MERMAID_TOTAL_ELEMENTS
+        ) {
+          this.#setMermaidError(
+            wrapper,
+            "The Mermaid diagrams in this review exceed the rendered complexity limit.",
+          );
+          continue;
+        }
+        totalBytes += rendered.byteLength;
+        totalElements += rendered.elementCount;
+        output.replaceChildren(rendered.element);
+        output.classList.remove("is-loading", "is-error");
+        output.classList.add("is-ready");
+        output.removeAttribute("aria-busy");
+        output.removeAttribute("role");
+        wrapper.dataset["mermaidRendered"] = "true";
+        details.open =
+          preserveSourceDisclosure ||
+          block?.classList.contains("has-comments") === true ||
+          this.#selection?.block === block ||
+          this.#pendingSelection?.block === block;
+      } catch {
+        if (
+          generation !== this.#generation ||
+          run !== this.#diagramRun ||
+          this.#destroyed ||
+          !wrapper.isConnected
+        ) {
+          return;
+        }
+        this.#setMermaidError(
+          wrapper,
+          "This Mermaid diagram could not be rendered. Check the source syntax.",
+        );
+      }
+    }
+    if (generation === this.#generation && run === this.#diagramRun) {
+      if (this.#diagramAbort === abort) this.#diagramAbort = null;
+      this.#ports.presentation.notifyIntrinsicHeight?.(this.#root.documentElement.scrollHeight);
+    }
+  }
+
   async #loadImageBytes(
     reviewDocument: ReviewDocument,
     image: ReviewImageDescriptor,
@@ -2554,6 +2746,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       empty.textContent = "This Markdown file is empty.";
       surface.replaceChildren(empty);
     }
+    this.#prepareMermaidDiagrams();
     this.#prepareLocalImages(reviewDocument);
     if (this.#round.persisted.path !== reviewDocument.path) {
       this.#round = createReviewRoundState(
@@ -2563,6 +2756,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#renderQueueCards();
     this.#setCommentsPanelOpen(commentsOpen);
     if (draft) this.#restoreComposerDraft(draft, reviewDocument);
+    void this.#installMermaidDiagrams(this.#generation);
     void this.#installLocalImages(reviewDocument, this.#generation);
     this.#requestDefaultFullscreen(reviewDocument);
   }

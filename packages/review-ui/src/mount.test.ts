@@ -11,7 +11,12 @@ import {
 
 import { mountMarkdownReview } from "./mount";
 import { ReviewPortError } from "./ports";
-import type { HostContext, HostContextListener, MarkdownReviewPorts } from "./ports";
+import type {
+  HostContext,
+  HostContextListener,
+  MarkdownReviewPorts,
+  ReviewDiagramRenderer,
+} from "./ports";
 
 const SESSION = "123e4567-e89b-42d3-a456-426614174000";
 const NOW = "2026-08-23T20:00:00.000Z";
@@ -314,6 +319,196 @@ describe("mountMarkdownReview", () => {
       },
     ]);
     expect(checkboxes[0]?.hasAttribute("onclick")).toBeFalse();
+    handle.destroy();
+  });
+
+  test("renders Mermaid diagrams while preserving canonical selectable source", async () => {
+    installShell();
+    const diagramSource = "flowchart LR\nA[Draft] --> B[Done]";
+    const diagramDocument: ReviewDocument = {
+      ...reviewDocument,
+      html:
+        '<section class="review-block" data-start-line="1" data-end-line="6">' +
+        `<p>Before diagram.</p><pre><code class="language-mermaid">${diagramSource.replaceAll(">", "&gt;")}</code></pre>` +
+        "<p>After diagram.</p></section>",
+    };
+    const renders: Parameters<ReviewDiagramRenderer["render"]>[] = [];
+    const diagramRenderer: ReviewDiagramRenderer = {
+      render(source, request) {
+        renders.push([source, request]);
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("role", "img");
+        svg.setAttribute("aria-label", request.accessibleLabel);
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.textContent = "Rendered node that is not Markdown source";
+        svg.appendChild(text);
+        const element = document.createElement("span");
+        element.appendChild(svg);
+        return Promise.resolve({ element, byteLength: 256, elementCount: 2 });
+      },
+    };
+    const harness = createHarness();
+    const handle = mountMarkdownReview({
+      ports: harness.ports,
+      initialDocument: diagramDocument,
+      diagramRenderer,
+    });
+    await settle(6);
+
+    expect(renders).toHaveLength(1);
+    expect(renders[0]?.[0]).toBe(diagramSource);
+    expect(renders[0]?.[1]).toMatchObject({
+      accessibleLabel: "Mermaid diagram, lines 1–6",
+      theme: "light",
+    });
+    expect(document.querySelector(".mermaid-render svg")?.getAttribute("role")).toBe("img");
+    const source = document.querySelector<HTMLDetailsElement>(".mermaid-source");
+    expect(source?.open).toBeFalse();
+    expect(source?.querySelector("code")?.textContent).toBe(diagramSource);
+
+    const before = document.querySelector(".review-block p")?.firstChild;
+    const after = document.querySelectorAll(".review-block p")[1]?.firstChild;
+    if (!before || !after) throw new Error("Expected Mermaid selection boundaries");
+    const range = document.createRange();
+    range.setStart(before, 0);
+    range.setEnd(after, after.textContent?.length ?? 0);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+    await settle();
+    document.getElementById("selection-action")?.click();
+    const quote = document.getElementById("quote")?.textContent ?? "";
+    expect(quote).toContain("Before diagram.");
+    expect(quote).toContain(diagramSource);
+    expect(quote).toContain("After diagram.");
+    expect(quote).not.toContain("Rendered node that is not Markdown source");
+
+    document.getElementById("close-composer")?.click();
+    document.getElementById("theme-toggle")?.click();
+    await settle(6);
+    expect(renders).toHaveLength(2);
+    expect(renders[1]?.[1].theme).toBe("dark");
+    handle.destroy();
+  });
+
+  test("shows bounded Mermaid failures without leaking renderer errors", async () => {
+    installShell();
+    const diagramRenderer: ReviewDiagramRenderer = {
+      render: () => Promise.reject(new Error("secret parser internals")),
+    };
+    const diagramDocument: ReviewDocument = {
+      ...reviewDocument,
+      html:
+        '<section class="review-block" data-start-line="1" data-end-line="3">' +
+        '<pre><code class="language-mermaid">not a diagram</code></pre></section>',
+    };
+    const harness = createHarness();
+    const handle = mountMarkdownReview({
+      ports: harness.ports,
+      initialDocument: diagramDocument,
+      diagramRenderer,
+    });
+    await settle(6);
+
+    const output = document.querySelector<HTMLElement>(".mermaid-render");
+    expect(output?.getAttribute("role")).toBe("alert");
+    expect(output?.textContent).toContain("could not be rendered");
+    expect(output?.textContent).not.toContain("secret parser internals");
+    expect(document.querySelector<HTMLDetailsElement>(".mermaid-source")?.open).toBeTrue();
+    handle.destroy();
+  });
+
+  test("bounds Mermaid source bytes and diagram count before calling the renderer", async () => {
+    installShell();
+    let renderCount = 0;
+    const diagramRenderer: ReviewDiagramRenderer = {
+      render(source, request) {
+        renderCount += 1;
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("aria-label", request.accessibleLabel);
+        const element = document.createElement("span");
+        element.appendChild(svg);
+        return Promise.resolve({ element, byteLength: 128, elementCount: 1 });
+      },
+    };
+    const codeBlocks = Array.from(
+      { length: 13 },
+      (_, index) =>
+        `<pre><code class="language-mermaid">flowchart LR\nA${index}--&gt;B</code></pre>`,
+    ).join("");
+    const boundedDocument: ReviewDocument = {
+      ...reviewDocument,
+      html: `<section class="review-block" data-start-line="1" data-end-line="40">${codeBlocks}</section>`,
+    };
+    const harness = createHarness();
+    const handle = mountMarkdownReview({
+      ports: harness.ports,
+      initialDocument: boundedDocument,
+      diagramRenderer,
+    });
+    await settle(20);
+
+    expect(renderCount).toBe(12);
+    expect(document.querySelectorAll(".mermaid-diagram")).toHaveLength(13);
+    expect(document.querySelectorAll(".mermaid-render.is-error")).toHaveLength(1);
+    expect(document.querySelector(".mermaid-render.is-error")?.textContent).toContain(
+      "up to 12 Mermaid diagrams",
+    );
+    handle.destroy();
+  });
+
+  test("bounds aggregate Mermaid output and keeps commented source disclosed", async () => {
+    installShell();
+    const diagramRenderer: ReviewDiagramRenderer = {
+      render(source, request) {
+        const element = document.createElement("span");
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("aria-label", request.accessibleLabel);
+        element.appendChild(svg);
+        return Promise.resolve({
+          element,
+          byteLength: source.includes("Oversized") ? 4 * 1024 * 1024 + 1 : 256,
+          elementCount: 2,
+        });
+      },
+    };
+    const diagramDocument: ReviewDocument = {
+      ...reviewDocument,
+      html:
+        '<section class="review-block" data-start-line="1" data-end-line="3">' +
+        '<pre><code class="language-mermaid">flowchart LR\nOversized--&gt;B</code></pre></section>' +
+        '<section class="review-block" data-start-line="5" data-end-line="7">' +
+        '<pre><code class="language-mermaid">flowchart LR\nA--&gt;B</code></pre></section>',
+    };
+    const harness = createHarness({
+      initialState: persisted([
+        queued({
+          id: "diagram-comment",
+          serial: 1,
+          startLine: 5,
+          endLine: 7,
+          quote: "flowchart LR\nA-->B",
+          feedback: "Clarify this flow.",
+        }),
+      ]),
+    });
+    const handle = mountMarkdownReview({
+      ports: harness.ports,
+      initialDocument: diagramDocument,
+      diagramRenderer,
+    });
+    await settle(6);
+
+    expect(document.querySelector(".mermaid-render.is-error")?.textContent).toContain(
+      "rendered complexity limit",
+    );
+    const sources = document.querySelectorAll<HTMLDetailsElement>(".mermaid-source");
+    expect(sources[0]?.open).toBeTrue();
+    expect(sources[1]?.open).toBeTrue();
+    expect(document.querySelectorAll(".review-block")[1]?.classList.contains("has-comments")).toBe(
+      true,
+    );
     handle.destroy();
   });
 

@@ -68,8 +68,10 @@ async function assertBudgets(): Promise<void> {
   if (serverBytes > 2.5 * 1024 * 1024) {
     throw new Error(`Server bundle is ${serverBytes} bytes; the limit is 2.5 MiB.`);
   }
-  if (browserBytes > 750 * 1024) {
-    throw new Error(`Browser payload is ${browserBytes} bytes; the limit is 750 KiB.`);
+  // Mermaid is bundled into the single offline MCP Apps resource so the strict CSP
+  // never needs a script or module origin. Keep the resulting one-file payload bounded.
+  if (browserBytes > 4 * 1024 * 1024) {
+    throw new Error(`Browser payload is ${browserBytes} bytes; the limit is 4 MiB.`);
   }
 }
 

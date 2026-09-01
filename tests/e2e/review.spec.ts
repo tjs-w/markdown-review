@@ -157,6 +157,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#title")).toHaveText("Markdown Review Fixture");
   await expect(page.locator("html")).toHaveAttribute("data-surface", "review");
+  await expect(page.locator(".mermaid-render svg")).toBeVisible();
 });
 
 test.afterEach(async ({ page }) => {
@@ -551,8 +552,15 @@ test("suppresses the host menu, copies source text, and queues whole-document fe
 
   await page.keyboard.press("Escape");
   await expect.poll(() => page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
-  await page.locator("#document").focus();
+  await page
+    .locator(".review-block h1")
+    .first()
+    .evaluate((element) => {
+      element.setAttribute("tabindex", "-1");
+      (element as HTMLElement).focus({ preventScroll: true });
+    });
   await page.keyboard.press("Shift+F10");
+  await expect(page.locator("#review-context-menu")).toBeVisible();
   await expect(page.locator("#context-comment-document")).toBeFocused();
   const menuResults = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
@@ -778,6 +786,43 @@ test("renders task-list checkboxes without duplicate bullets", async ({ page }) 
   expect(styles.checkboxHeight).toBeGreaterThanOrEqual(14);
   expect(styles.checkboxBorder).toBe("solid");
   expect(styles.pointerEvents).toBe("none");
+});
+
+test("renders Mermaid locally, preserves source, and follows the review theme", async ({
+  page,
+}) => {
+  const output = page.locator(".mermaid-render");
+  const diagram = output.locator("svg");
+  const source = page.locator(".mermaid-source");
+
+  await expect(diagram).toBeVisible();
+  await expect(diagram).toHaveAttribute("role", "img");
+  await expect(diagram).toHaveAccessibleName(/Mermaid diagram/);
+  await expect(source).not.toHaveAttribute("open", "");
+  await source.locator("summary").click();
+  await expect(source.locator("code.language-mermaid")).toContainText("A[Draft] --> B{Review}");
+  await expect(output.locator("script, foreignObject, a[href], [onclick], [onload]")).toHaveCount(
+    0,
+  );
+
+  const lightFill = await diagram
+    .locator(".node rect")
+    .first()
+    .evaluate((element) => getComputedStyle(element).fill);
+  await page.locator("#theme-toggle").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(diagram).toBeVisible();
+  const darkFill = await diagram
+    .locator(".node rect")
+    .first()
+    .evaluate((element) => getComputedStyle(element).fill);
+  expect(darkFill).not.toBe(lightFill);
+
+  const accessibility = await new AxeBuilder({ page })
+    .include(".mermaid-diagram")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
 });
 
 test("reveals the image feedback affordance only at the bottom-right interaction point", async ({

@@ -15,7 +15,7 @@ static validated registry
         └── fixed HTTPS backend API
         │
         ▼
-ui://flowzone/v1.html                 universal MCP Apps shell
+ui://flowzone/v2.html                 universal MCP Apps shell
         └── registered plugin view adapter
 
 plugin-owned typed helper tools       app-only
@@ -92,7 +92,7 @@ FlowZone retries only explicitly idempotent actions and only retryable failures,
 
 ## Universal UI shell
 
-`ui://flowzone/v1.html` is the single model-tool output resource. Public model output stays small; private UI data uses a typed metadata envelope:
+`ui://flowzone/v2.html` is the single model-tool output resource. Public model output stays small; private UI data uses a typed metadata envelope:
 
 ```json
 {
@@ -104,7 +104,7 @@ FlowZone retries only explicitly idempotent actions and only retryable failures,
 }
 ```
 
-The browser host dispatches that tuple through a fixed view registry. Markdown Review owns a validated document view; actions without a plugin view receive FlowZone's built-in, bounded generic result view. Unknown plugin view routes and invalid payloads fail closed. The resource CSP permits no network, remote resource, or frame domains and requests clipboard-write only. A legacy `ui://markdown-review/v30.html` resource alias serves the same shell for already cached views; new calls use only `ui://flowzone/v1.html`.
+The browser host dispatches that tuple through a fixed view registry. Markdown Review owns a validated document view; actions without a plugin view receive FlowZone's built-in, bounded generic result view. Unknown plugin view routes and invalid payloads fail closed. The resource CSP permits no network, remote resource, or frame domains and requests clipboard-write only. A legacy `ui://markdown-review/v30.html` resource alias serves the same shell for already cached views; new calls use only `ui://flowzone/v2.html`.
 
 ## Markdown Review compatibility
 

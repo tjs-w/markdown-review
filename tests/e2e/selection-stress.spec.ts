@@ -67,6 +67,7 @@ test.beforeEach(async ({ page }) => {
   requestLog.set(page, externalRequests);
   await page.goto("/");
   await expect(page.locator("#title")).toHaveText("Markdown Review Fixture");
+  await expect(page.locator(".mermaid-render svg")).toBeVisible();
 });
 
 test.afterEach(async ({ page }) => {
@@ -217,6 +218,7 @@ test("does not offer stale selection actions when right-clicking outside the sel
     block.appendChild(paragraph);
     document.getElementById("document")?.appendChild(block);
   });
+  await page.locator("#stress-selected-words").scrollIntoViewIfNeeded();
 
   await page.locator("#stress-selected-words").evaluate((element) => {
     const range = document.createRange();
@@ -256,13 +258,12 @@ test("does not offer stale selection actions when right-clicking outside the sel
     selection?.addRange(range);
     document.dispatchEvent(new Event("selectionchange"));
   });
-  await page
-    .locator(".review-block h2")
-    .first()
-    .evaluate((element) => {
-      element.setAttribute("tabindex", "-1");
-      (element as HTMLElement).focus();
-    });
+  const keyboardMenuTarget = page.locator(".review-block h2", { hasText: "Mermaid" });
+  await keyboardMenuTarget.scrollIntoViewIfNeeded();
+  await keyboardMenuTarget.evaluate((element) => {
+    element.setAttribute("tabindex", "-1");
+    (element as HTMLElement).focus({ preventScroll: true });
+  });
   await page.keyboard.press("Shift+F10");
   await expect(page.locator("#review-context-menu")).toBeVisible();
   await expect(page.locator("#context-copy-selection")).toBeHidden();
@@ -334,6 +335,7 @@ test("drag-selecting a link does not activate external navigation", async ({ pag
   ]);
 
   await clickAwayFromSelection(page);
+  await link.scrollIntoViewIfNeeded();
   const backwardSelection = await link.evaluate((element) => {
     const text = element.firstChild;
     if (!(text instanceof Text)) throw new Error("Expected reverse link-selection text");

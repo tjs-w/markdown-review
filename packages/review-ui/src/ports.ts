@@ -136,11 +136,29 @@ export interface ReviewImageDecoder {
   ): Promise<DecodedReviewImage>;
 }
 
+export interface ReviewDiagramRenderRequest {
+  readonly id: string;
+  readonly theme: ReviewTheme;
+  readonly accessibleLabel: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface RenderedReviewDiagram {
+  readonly element: HTMLElement;
+  readonly byteLength: number;
+  readonly elementCount: number;
+}
+
+export interface ReviewDiagramRenderer {
+  render(source: string, request: ReviewDiagramRenderRequest): Promise<RenderedReviewDiagram>;
+}
+
 export interface MountMarkdownReviewOptions {
   readonly root?: Document;
   readonly ports: MarkdownReviewPorts;
   readonly initialDocument?: ReviewDocument;
   readonly imageDecoder?: ReviewImageDecoder;
+  readonly diagramRenderer?: ReviewDiagramRenderer;
   readonly allowNativeDevTools?: boolean;
 }
 
