@@ -7,7 +7,7 @@ import { build, type BuildOptions } from "esbuild";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const checkOnly = process.argv.includes("--check");
-const temporaryRoot = checkOnly ? await mkdtemp(join(tmpdir(), "markdown-review-build-")) : root;
+const temporaryRoot = checkOnly ? await mkdtemp(join(tmpdir(), "flowzone-build-")) : root;
 
 const outputs = [
   {
@@ -22,7 +22,7 @@ const outputs = [
   },
   {
     source: resolve(root, "packages/host-mcp-apps/src/browser-entry.ts"),
-    destination: "web/dist/review.js",
+    destination: "web/dist/flowzone.js",
     options: {
       platform: "browser",
       format: "iife",
@@ -61,8 +61,8 @@ async function assertArtifactParity(): Promise<void> {
 async function assertBudgets(): Promise<void> {
   const serverBytes = (await stat(resolve(temporaryRoot, "server/dist/server.cjs"))).size;
   const browserBytes = await Promise.all([
-    stat(resolve(root, "web/review.html")),
-    stat(resolve(temporaryRoot, "web/dist/review.js")),
+    stat(resolve(root, "web/flowzone.html")),
+    stat(resolve(temporaryRoot, "web/dist/flowzone.js")),
   ]).then((values) => values.reduce((total, value) => total + value.size, 0));
 
   if (serverBytes > 2.5 * 1024 * 1024) {

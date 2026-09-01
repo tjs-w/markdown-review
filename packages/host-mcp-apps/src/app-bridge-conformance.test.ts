@@ -178,7 +178,7 @@ describe("official MCP Apps AppBridge conformance", () => {
     await host.connect();
 
     expect(initialized).toBe(true);
-    expect(bridge.getAppVersion()).toEqual({ name: "markdown-review", version: "0.1.0" });
+    expect(bridge.getAppVersion()).toEqual({ name: "flowzone", version: "0.1.0" });
     expect(bridge.getAppCapabilities()?.availableDisplayModes).toEqual(["inline", "fullscreen"]);
     expect(documents).toEqual([]);
 
@@ -417,7 +417,7 @@ describe("official MCP Apps AppBridge conformance", () => {
 
     expect(harness.documents).toEqual([laterDocument]);
     expect(harness.errors.map((error) => error.message)).toEqual([
-      "The Markdown Review host returned an invalid document payload",
+      "The FlowZone host returned an unsupported or invalid view payload",
     ]);
 
     await closeHarness(harness);

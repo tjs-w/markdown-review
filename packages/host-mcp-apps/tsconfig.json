@@ -9,5 +9,10 @@
   },
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts"],
-  "references": [{ "path": "../contracts" }, { "path": "../core" }, { "path": "../review-ui" }]
+  "references": [
+    { "path": "../flowzone-contracts" },
+    { "path": "../contracts" },
+    { "path": "../core" },
+    { "path": "../review-ui" }
+  ]
 }

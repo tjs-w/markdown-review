@@ -90,16 +90,18 @@ describe("checked-in Node stdio bundle", () => {
     await client.connect(transport);
 
     try {
+      expect(client.getServerVersion()?.name).toBe("flowzone");
+      expect(client.getInstructions()).toContain("one router tool");
       const tools = await client.listTools();
       expect(tools.tools.map((tool) => tool.name)).toEqual([
-        "open_markdown_review",
+        "flowzone",
         "check_markdown_review_document",
         "load_markdown_review_document",
         "recover_markdown_review_document",
         "load_markdown_review_image_chunk",
       ]);
 
-      const resource = await client.readResource({ uri: "ui://markdown-review/v29.html" });
+      const resource = await client.readResource({ uri: "ui://flowzone/v1.html" });
       const content = resource.contents[0];
       expect(content?.mimeType).toBe("text/html;profile=mcp-app");
       const html = content && "text" in content ? content.text : "";
@@ -108,14 +110,22 @@ describe("checked-in Node stdio bundle", () => {
       expect(html).toContain('aria-describedby="review-help-tooltip"');
       expect(html).toContain('id="review-help-tooltip" role="tooltip"');
       expect(html).toContain("Right-click or use Review actions ·");
-      expect(html).not.toContain("MARKDOWN_REVIEW_APP");
+      expect(html).not.toContain("FLOWZONE_APP");
 
       const opened = await client.callTool({
-        name: "open_markdown_review",
-        arguments: { path: markdownPath },
+        name: "flowzone",
+        arguments: {
+          plugin: "markdown-review",
+          action: "open",
+          input: { path: markdownPath },
+        },
       });
       expect(opened.isError).toBeUndefined();
-      const summary = ReviewDocumentSummarySchema.parse(opened.structuredContent);
+      const publicEnvelope = metadata(opened.structuredContent);
+      expect(publicEnvelope["schema"]).toBe("flowzone/result-v1");
+      expect(publicEnvelope["plugin"]).toBe("markdown-review");
+      expect(publicEnvelope["action"]).toBe("open");
+      const summary = ReviewDocumentSummarySchema.parse(publicEnvelope["result"]);
       expect(summary.path).toBe(await realpath(markdownPath));
       expect(JSON.stringify(summary)).not.toContain("Private body");
       const document = ReviewDocumentSchema.parse(metadata(opened._meta)["document"]);

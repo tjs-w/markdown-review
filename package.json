@@ -1,21 +1,23 @@
 {
-  "name": "markdown-review",
+  "name": "flowzone",
   "version": "0.1.0",
   "private": true,
-  "description": "A local-first Markdown review surface with queued, line-anchored feedback for MCP Apps hosts.",
+  "description": "A single-endpoint MCP plugin host with Markdown Review bundled as its first plugin.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tjs-w/markdown-review.git"
+    "url": "git+https://github.com/tjs-w/FlowZone.git"
   },
-  "homepage": "https://github.com/tjs-w/markdown-review#readme",
+  "homepage": "https://github.com/tjs-w/FlowZone#readme",
   "bugs": {
-    "url": "https://github.com/tjs-w/markdown-review/issues"
+    "url": "https://github.com/tjs-w/FlowZone/issues"
   },
   "keywords": [
     "codex",
+    "flowzone",
     "markdown",
     "mcp",
     "mcp-apps",
+    "plugins",
     "typescript",
     "review"
   ],

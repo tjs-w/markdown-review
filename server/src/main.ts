@@ -1,25 +1,27 @@
 import { resolve } from "node:path";
 
 import {
-  createFileReviewUiAssetLoader,
-  createMarkdownReviewServer,
+  createFlowZoneServer,
+  createFileFlowZoneUiAssetLoader,
+  createMarkdownReviewPlugin,
   developerModeEnabled,
-} from "@markdown-review/mcp-server";
+} from "@flowzone/mcp-server";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 const pluginRoot = resolve(__dirname, "../..");
-const assetLoader = createFileReviewUiAssetLoader({
-  templatePath: resolve(pluginRoot, "web/review.html"),
-  reviewBundlePath: resolve(pluginRoot, "web/dist/review.js"),
+const assetLoader = createFileFlowZoneUiAssetLoader({
+  templatePath: resolve(pluginRoot, "web/flowzone.html"),
+  bundlePath: resolve(pluginRoot, "web/dist/flowzone.js"),
 });
-const server = createMarkdownReviewServer({
+const server = createFlowZoneServer({
   assetLoader,
-  allowNativeDevTools: developerModeEnabled(process.env["MARKDOWN_REVIEW_DEVTOOLS"]),
+  allowNativeDevTools: developerModeEnabled(process.env["FLOWZONE_DEVTOOLS"]),
+  plugins: [createMarkdownReviewPlugin()],
 });
 const transport = new StdioServerTransport();
 
 server.connect(transport).catch((error: unknown) => {
   const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
-  process.stderr.write(`Markdown Review MCP failed: ${message}\n`);
+  process.stderr.write(`FlowZone MCP failed: ${message}\n`);
   process.exitCode = 1;
 });

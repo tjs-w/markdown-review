@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "markdown-review": {
+    "flowzone": {
       "command": "node",
       "args": ["./server/dist/server.cjs"],
       "cwd": ".",

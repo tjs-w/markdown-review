@@ -1,11 +1,11 @@
 {
-  "name": "markdown-review",
+  "name": "flowzone",
   "interface": {
-    "displayName": "Markdown Review"
+    "displayName": "FlowZone"
   },
   "plugins": [
     {
-      "name": "markdown-review",
+      "name": "flowzone",
       "source": {
         "source": "local",
         "path": "./"
@@ -16,7 +16,7 @@
       },
       "category": "Productivity",
       "interface": {
-        "displayName": "Markdown Review"
+        "displayName": "FlowZone"
       }
     }
   ]

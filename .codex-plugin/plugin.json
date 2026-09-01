@@ -1,24 +1,25 @@
 {
-  "name": "markdown-review",
-  "version": "0.1.0+codex.20260826043000",
-  "description": "Review rendered Markdown with Codex while keeping the .md file canonical.",
+  "name": "flowzone",
+  "version": "0.1.0+codex.20260831235830",
+  "description": "Route registered plugin actions through one FlowZone MCP tool and universal UI, including Markdown Review.",
   "author": {
     "name": "Tejas",
     "url": "https://github.com/tjs-w"
   },
-  "homepage": "https://github.com/tjs-w/markdown-review#readme",
-  "repository": "https://github.com/tjs-w/markdown-review",
+  "homepage": "https://github.com/tjs-w/FlowZone#readme",
+  "repository": "https://github.com/tjs-w/FlowZone",
   "keywords": [
     "codex",
+    "flowzone",
     "markdown",
     "review",
     "mcp-app"
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Markdown Review",
-    "shortDescription": "Queue feedback on rendered Markdown.",
-    "longDescription": "Opens rendered Markdown fullscreen with selected-text copy plus passage, image, and whole-document feedback in one batch message to Codex.",
+    "displayName": "FlowZone",
+    "shortDescription": "One MCP server for focused plugins.",
+    "longDescription": "Routes statically registered plugin actions through one schema-driven MCP tool and universal app shell. Includes Markdown Review for line-anchored feedback on rendered local Markdown.",
     "developerName": "Tejas",
     "category": "Productivity",
     "capabilities": [

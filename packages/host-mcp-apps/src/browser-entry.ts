@@ -1,7 +1,7 @@
 import { formatCodexSubmission } from "./format-codex-submission";
-import { startMarkdownReviewRuntime } from "./browser-runtime";
+import { startFlowZoneRuntime } from "./browser-runtime";
 
-startMarkdownReviewRuntime({
+startFlowZoneRuntime({
   submissionFormatter: formatCodexSubmission,
-  allowNativeDevTools: document.documentElement.dataset["markdownReviewDeveloperMode"] === "true",
+  allowNativeDevTools: document.documentElement.dataset["flowzoneDeveloperMode"] === "true",
 });

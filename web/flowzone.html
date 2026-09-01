@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Markdown Review</title>
+    <title>FlowZone</title>
     <style>
       :root {
         color-scheme: light;
@@ -21,6 +21,8 @@
         --warning: #9a6700;
         --warning-soft: #fff8c5;
         --success: #1a7f37;
+        --update-pill: #82bfd0;
+        --on-update-pill: #12333d;
         --review-highlight-bg: rgba(9, 105, 218, 0.16);
         --review-highlight-fg: #1f2328;
         --review-highlight-edge: #0969da;
@@ -43,6 +45,8 @@
         --warning: #d29922;
         --warning-soft: #3d2f12;
         --success: #89c99a;
+        --update-pill: #76afbf;
+        --on-update-pill: #102d35;
         --review-highlight-bg: rgba(145, 180, 242, 0.2);
         --review-highlight-fg: #e6edf3;
         --review-highlight-edge: #91b4f2;
@@ -92,6 +96,28 @@
         clip: rect(0, 0, 0, 0);
         white-space: nowrap;
         border: 0;
+      }
+      .flowzone-generic {
+        min-height: 100vh;
+        padding: clamp(24px, 8vw, 96px);
+        background: var(--bg);
+      }
+      .flowzone-generic-card {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 32px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--paper);
+        box-shadow: var(--shadow-small);
+      }
+      .flowzone-generic-card h1 {
+        margin: 0 0 12px;
+        font-size: 22px;
+      }
+      .flowzone-generic-card p {
+        margin: 0;
+        color: var(--muted);
       }
 
       .launcher {
@@ -220,20 +246,53 @@
         display: inline-flex;
         flex: 0 0 auto;
         align-items: center;
-        min-height: 16px;
-        padding: 0 5px;
-        border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+        min-height: 30px;
+        overflow: hidden;
+        border: 0;
         border-radius: 999px;
-        background: color-mix(in srgb, var(--accent) 8%, var(--bg));
-        color: var(--accent);
-        font-size: 9px;
-        font-weight: 650;
-        letter-spacing: 0.01em;
-        line-height: 1;
+        background: var(--update-pill);
+        color: var(--on-update-pill);
+        box-shadow: 0 3px 10px color-mix(in srgb, var(--ink) 12%, transparent);
         white-space: nowrap;
       }
       .document-update-indicator[hidden] {
         display: none;
+      }
+      .document-update-action,
+      .document-update-dismiss {
+        display: inline-flex;
+        min-height: 30px;
+        align-items: center;
+        justify-content: center;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+      }
+      .document-update-action {
+        gap: 6px;
+        padding: 5px 7px 5px 10px;
+        font-size: 12px;
+        font-weight: 520;
+      }
+      .document-update-dismiss {
+        width: 30px;
+        padding: 0;
+        font-size: 16px;
+        font-weight: 350;
+      }
+      .document-update-action:hover,
+      .document-update-dismiss:hover {
+        background: color-mix(in srgb, #000000 10%, transparent);
+      }
+      .document-update-action:focus-visible,
+      .document-update-dismiss:focus-visible {
+        outline: 2px solid currentColor;
+        outline-offset: -3px;
+      }
+      .document-update-action .ui-icon {
+        width: 13px;
+        height: 13px;
       }
       h1.title {
         margin: 0;
@@ -841,35 +900,22 @@
       }
       .inline-composer {
         position: relative;
-        width: min(440px, calc(100% - 12px));
+        width: min(520px, calc(100% - 12px));
         margin: 8px 0 14px auto;
-        padding: 10px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--paper);
-        box-shadow: 0 8px 24px rgba(140, 149, 159, 0.18);
+        padding: 0;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
       }
-      html[data-theme="dark"] .inline-composer {
-        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34);
-      }
       .inline-composer::before {
-        position: absolute;
-        top: -5px;
-        right: 18px;
-        width: 9px;
-        height: 9px;
-        border-top: 1px solid var(--line);
-        border-left: 1px solid var(--line);
-        background: var(--paper);
-        content: "";
-        transform: rotate(45deg);
+        content: none;
       }
       .composer-head {
         display: flex;
         align-items: center;
         gap: 7px;
-        margin-bottom: 6px;
+        margin: 0 6px 5px;
       }
       .inline-composer .composer-title {
         flex: 1;
@@ -895,12 +941,12 @@
       }
       .inline-composer .quote {
         display: -webkit-box;
-        max-height: 40px;
+        max-height: 30px;
         overflow: hidden;
-        margin: 0 0 8px;
-        padding: 5px 8px;
-        border-left: 2px solid var(--line);
-        background: var(--soft);
+        margin: 0 8px 6px;
+        padding: 0 0 0 7px;
+        border-left: 2px solid var(--accent);
+        background: transparent;
         color: var(--muted);
         font-size: 11px;
         line-height: 1.4;
@@ -919,6 +965,42 @@
         background: var(--paper);
         color: var(--ink);
         font-size: 13px;
+      }
+      .composer-input-row {
+        display: flex;
+        min-height: 48px;
+        align-items: flex-end;
+        gap: 6px;
+        padding: 4px 5px 4px 14px;
+        border: 1px solid color-mix(in srgb, var(--control-line) 70%, var(--line));
+        border-radius: 26px;
+        background: color-mix(in srgb, var(--soft) 84%, var(--paper));
+        box-shadow: inset 0 1px 0 color-mix(in srgb, var(--paper) 50%, transparent);
+        transition:
+          border-color 0.14s ease,
+          box-shadow 0.14s ease;
+      }
+      .composer-input-row:focus-within {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+      }
+      .composer-input-row textarea {
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: 38px;
+        max-height: 112px;
+        padding: 9px 2px 7px;
+        border: 0;
+        border-radius: 0;
+        outline: 0;
+        background: transparent;
+        line-height: 1.45;
+      }
+      .composer-input-row textarea:focus-visible {
+        outline: 0;
+      }
+      .composer-input-row textarea::placeholder {
+        color: color-mix(in srgb, var(--muted) 82%, transparent);
       }
       .composer-help-popover {
         position: absolute;
@@ -974,7 +1056,7 @@
         display: flex;
         align-items: center;
         justify-content: flex-end;
-        margin-top: 7px;
+        margin: 0;
       }
       .inline-composer .reference-help {
         margin: 5px 0 0;
@@ -1044,8 +1126,9 @@
           monospace;
       }
       .composer-actions .button {
-        min-height: 34px;
-        padding: 5px 11px;
+        min-height: 38px;
+        padding: 5px 13px;
+        border-radius: 20px;
         font-size: 12px;
       }
 
@@ -1375,6 +1458,8 @@
       @media (forced-colors: active) {
         .paper,
         .inline-composer,
+        .composer-input-row,
+        .document-update-indicator,
         .queued-card,
         .comment-index-item,
         .comments-panel,
@@ -1427,6 +1512,12 @@
     </style>
   </head>
   <body>
+    <main class="flowzone-generic" id="flowzone-generic" hidden>
+      <section class="flowzone-generic-card" aria-live="polite">
+        <h1 id="flowzone-generic-title">FlowZone</h1>
+        <p id="flowzone-generic-message">The action completed.</p>
+      </section>
+    </main>
     <div class="launcher" id="launcher">
       <button
         class="launcher-button"
@@ -1466,15 +1557,32 @@
             </div>
           </div>
         </div>
-        <span
+        <div
           class="document-update-indicator"
           id="document-update-indicator"
-          role="status"
+          role="region"
           aria-live="polite"
           aria-atomic="true"
+          aria-label="A newer Markdown version is available"
           hidden
-          >File updated</span
         >
+          <button class="document-update-action" id="document-update-refresh" type="button">
+            <svg class="ui-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M13.6 3.2V.75a.75.75 0 0 1 1.5 0v4.2a.75.75 0 0 1-.75.75h-4.2a.75.75 0 0 1 0-1.5h2.48A5.65 5.65 0 1 0 13.4 9a.75.75 0 0 1 1.48.25A7.15 7.15 0 1 1 13.6 3.2Z"
+              ></path>
+            </svg>
+            <span>Refresh for latest</span>
+          </button>
+          <button
+            class="document-update-dismiss"
+            id="document-update-dismiss"
+            type="button"
+            aria-label="Dismiss latest-version notice"
+          >
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
         <div class="actions">
           <div class="review-help">
             <button
@@ -1777,14 +1885,29 @@
       </div>
       <blockquote class="quote" id="quote"></blockquote>
       <label class="sr-only" for="feedback">Feedback to Codex</label>
-      <textarea
-        id="feedback"
-        rows="2"
-        maxlength="2400"
-        placeholder="Leave feedback for Codex…"
-        aria-describedby="line-pill quote feedback-message"
-        aria-keyshortcuts="Enter"
-      ></textarea>
+      <div class="composer-input-row">
+        <textarea
+          id="feedback"
+          rows="1"
+          maxlength="2400"
+          placeholder="Prescribe a change or ask a question"
+          aria-describedby="line-pill quote feedback-message"
+          aria-keyshortcuts="Enter"
+        ></textarea>
+        <div class="composer-footer">
+          <div class="composer-actions">
+            <button
+              class="button primary"
+              id="add-queue"
+              type="button"
+              aria-label="Queue feedback"
+              disabled
+            >
+              <span id="add-queue-label">Queue</span>
+            </button>
+          </div>
+        </div>
+      </div>
       <p
         class="reference-help"
         id="feedback-message"
@@ -1792,19 +1915,6 @@
         aria-live="polite"
         aria-atomic="true"
       ></p>
-      <div class="composer-footer">
-        <div class="composer-actions">
-          <button
-            class="button primary"
-            id="add-queue"
-            type="button"
-            aria-label="Queue feedback"
-            disabled
-          >
-            <span id="add-queue-label">Queue</span>
-          </button>
-        </div>
-      </div>
     </section>
 
     <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true">
@@ -1818,6 +1928,6 @@
       aria-live="polite"
       aria-atomic="true"
     ></div>
-    <!-- MARKDOWN_REVIEW_APP -->
+    <!-- FLOWZONE_APP -->
   </body>
 </html>

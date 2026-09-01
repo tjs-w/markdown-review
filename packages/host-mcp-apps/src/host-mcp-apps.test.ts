@@ -178,6 +178,37 @@ describe("host payload validation", () => {
     ).toBeNull();
   });
 
+  test("dispatches the Markdown Review view from the universal FlowZone envelope", () => {
+    expect(
+      findReviewDocument({
+        content: [],
+        _meta: {
+          flowzone: {
+            schema: "flowzone/ui-v1",
+            plugin: "markdown-review",
+            action: "open",
+            view: "review",
+            payload: reviewDocument,
+          },
+        },
+      }),
+    ).toEqual(reviewDocument);
+    expect(
+      findReviewDocument({
+        content: [],
+        _meta: {
+          flowzone: {
+            schema: "flowzone/ui-v1",
+            plugin: "unknown",
+            action: "open",
+            view: "review",
+            payload: reviewDocument,
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
   test("does not accept a document-shaped payload with an invalid session", () => {
     expect(
       findReviewDocument({

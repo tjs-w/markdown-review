@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "markdown-review",
+      "name": "flowzone",
       "dependencies": {
         "@modelcontextprotocol/ext-apps": "^1.7.5",
         "@modelcontextprotocol/sdk": "^1.30.0",
@@ -46,10 +46,18 @@
         "@markdown-review/contracts": "workspace:*",
       },
     },
+    "packages/flowzone-contracts": {
+      "name": "@flowzone/contracts",
+      "version": "0.1.0",
+      "dependencies": {
+        "zod": "^4.4.3",
+      },
+    },
     "packages/host-mcp-apps": {
       "name": "@markdown-review/host-mcp-apps",
       "version": "0.1.0",
       "dependencies": {
+        "@flowzone/contracts": "workspace:*",
         "@markdown-review/contracts": "workspace:*",
         "@markdown-review/core": "workspace:*",
         "@markdown-review/review-ui": "workspace:*",
@@ -72,9 +80,10 @@
       },
     },
     "packages/mcp-server": {
-      "name": "@markdown-review/mcp-server",
+      "name": "@flowzone/mcp-server",
       "version": "0.1.0",
       "dependencies": {
+        "@flowzone/contracts": "workspace:*",
         "@markdown-review/contracts": "workspace:*",
         "@markdown-review/markdown-node": "workspace:*",
         "@modelcontextprotocol/ext-apps": "^1.7.5",
@@ -176,6 +185,10 @@
 
     "@eslint/plugin-kit": ["@eslint/plugin-kit@0.4.1", "", { "dependencies": { "@eslint/core": "^0.17.0", "levn": "^0.4.1" } }, "sha512-43/qtrDUokr7LJqoF2c3+RInu/t4zfrpYdoSDfYyhg52rwLV6TnOvdG4fXm7IkSB3wErkcmJS9iEhjVtOSEjjA=="],
 
+    "@flowzone/contracts": ["@flowzone/contracts@workspace:packages/flowzone-contracts"],
+
+    "@flowzone/mcp-server": ["@flowzone/mcp-server@workspace:packages/mcp-server"],
+
     "@happy-dom/global-registrator": ["@happy-dom/global-registrator@20.11.6", "", { "dependencies": { "@types/node": ">=20.0.0", "happy-dom": "^20.11.6" } }, "sha512-ZQ47qUTeNbGhHkCGExJ1oZhruoxKRaxO44RgFETl3T4c1rRxIBlAOnM3SAH4XHu7Ue2owJXP+jOx1vOuKuxcSg=="],
 
     "@hono/node-server": ["@hono/node-server@2.1.1", "", { "peerDependencies": { "hono": "^4" } }, "sha512-ELuehkj5VCBdgEw9zs+ivkKwyzzUCSQuE96YmiPvn1ECBoZCczbFXJLeEGMTYjphP6gydh4pHMqEYPVMYUVgQg=="],
@@ -197,8 +210,6 @@
     "@markdown-review/host-mcp-apps": ["@markdown-review/host-mcp-apps@workspace:packages/host-mcp-apps"],
 
     "@markdown-review/markdown-node": ["@markdown-review/markdown-node@workspace:packages/markdown-node"],
-
-    "@markdown-review/mcp-server": ["@markdown-review/mcp-server@workspace:packages/mcp-server"],
 
     "@markdown-review/review-ui": ["@markdown-review/review-ui@workspace:packages/review-ui"],
 

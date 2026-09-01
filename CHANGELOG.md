@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Replaced plugin-owned model tools with one schema-driven `flowzone` router backed by an immutable startup registry; Markdown Review now uses the `markdown-review/open` route while retaining its typed app-only helpers and review wire contracts.
+- Added in-process, fixed allowlisted CLI/script, and fixed HTTPS executor contracts with bounded input/output, safe errors, cancellation, progress, timeouts, idempotent-only retries, concurrency limits, circuit breaking, command/file identity checks, runtime credentials, and no redirect following.
+- Introduced shared FlowZone request/result/UI/error contracts and the `ui://flowzone/v1.html` universal shell with a fixed view registry, closed CSP, and a temporary v30 Markdown resource/private-metadata compatibility bridge.
+- Updated the Markdown Review skill to guide router invocation without acting as a runtime backend, and documented plugin authoring and security boundaries.
+- Renamed the repository and installable bundle to FlowZone.
+
 All notable changes to this project will be documented here.
 
 ## 0.1.0 - 2026-08-24
@@ -29,6 +37,7 @@ All notable changes to this project will be documented here.
 - Updated the component resource cache key to `ui://markdown-review/v27.html`, restored reliable one-click submission through the Codex follow-up bridge, moved the host-reviewed Send popup behind a split-button Review action, and added `Command/Ctrl + Shift + Enter` direct submission.
 - Updated the component resource cache key to `ui://markdown-review/v28.html`, kept one active review per Markdown path by avoiding repeat opens after edits, added lightweight private revision checks, refreshed changed source in place, and showed a tiny `File updated` indicator without discarding queued feedback or drafts.
 - Updated the component resource cache key to `ui://markdown-review/v29.html` and rendered GFM task-list items as clear read-only checkboxes without duplicate list bullets, while preserving ordinary list markers and forced-colors support.
+- Updated the component resource cache key to `ui://markdown-review/v30.html`, replaced automatic source switching with a dismissible `Refresh for latest` prompt, and reshaped the comment editor around a compact rounded command field while retaining explicit queue, close, help, keyboard, and accessibility controls.
 - Added durable, eye-comfortable selected-text highlights for queued comments in light, dark, and forced-color themes, including exact duplicate-text anchors and safe stale relocation.
 - Removed legacy model-visible widget-state publication and shortened the fenced, injection-resistant Codex submission prompt.
 - Fixed Submit in Codex by accepting the host's standard empty `message` capability object.

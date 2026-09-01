@@ -43,7 +43,6 @@ const IMAGE_WORKERS = 2;
 const CHUNK_WORKERS = 4;
 const MAX_QUEUE_ITEMS = 20;
 const DOCUMENT_UPDATE_CHECK_INTERVAL_MS = 3_000;
-const DOCUMENT_UPDATE_NOTICE_MS = 2_400;
 
 interface ActiveSelection extends ReviewSelection {
   readonly block: HTMLElement;
@@ -348,8 +347,8 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   #compositionActive = false;
   #toastTimer: ReturnType<typeof setTimeout> | undefined;
   #documentUpdateCheckTimer: ReturnType<typeof setTimeout> | undefined;
-  #documentUpdateNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   #documentUpdateCheckInFlight = false;
+  #documentUpdateAvailable = false;
   #saveChain: Promise<void> = Promise.resolve();
   #documentBusy = false;
   #destroyed = false;
@@ -402,8 +401,6 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     }
     if (this.#toastTimer !== undefined) clearTimeout(this.#toastTimer);
     if (this.#documentUpdateCheckTimer !== undefined) clearTimeout(this.#documentUpdateCheckTimer);
-    if (this.#documentUpdateNoticeTimer !== undefined)
-      clearTimeout(this.#documentUpdateNoticeTimer);
     this.#closeManualCopy(false);
   }
 
@@ -494,10 +491,12 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   #setBusy(busy: boolean): void {
     this.#documentBusy = busy;
     this.#element("document").setAttribute("aria-busy", String(busy));
-    this.#element<HTMLButtonElement>("refresh").disabled =
+    const refreshDisabled =
       busy ||
       !this.#element("review-composer").hidden ||
       this.#ports.presentation.capabilities.documentTools === false;
+    this.#element<HTMLButtonElement>("refresh").disabled = refreshDisabled;
+    this.#element<HTMLButtonElement>("document-update-refresh").disabled = refreshDisabled;
   }
 
   #setMeta(message: string, error = false): void {
@@ -507,15 +506,19 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     meta.setAttribute("role", error ? "alert" : "status");
   }
 
-  #showDocumentUpdated(): void {
+  #showDocumentUpdateAvailable(): void {
+    this.#documentUpdateAvailable = true;
     const indicator = this.#element("document-update-indicator");
     indicator.hidden = false;
-    if (this.#documentUpdateNoticeTimer !== undefined)
-      clearTimeout(this.#documentUpdateNoticeTimer);
-    this.#documentUpdateNoticeTimer = setTimeout(() => {
-      indicator.hidden = true;
-      this.#documentUpdateNoticeTimer = undefined;
-    }, DOCUMENT_UPDATE_NOTICE_MS);
+  }
+
+  #dismissDocumentUpdate(): void {
+    this.#element("document-update-indicator").hidden = true;
+  }
+
+  #clearDocumentUpdate(): void {
+    this.#documentUpdateAvailable = false;
+    this.#element("document-update-indicator").hidden = true;
   }
 
   #showLoadError(error: unknown, retry?: () => void): void {
@@ -1744,10 +1747,12 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     field.disabled = sending;
     this.#element<HTMLButtonElement>("close-composer").disabled = sending;
     this.#element<HTMLButtonElement>("composer-help-toggle").disabled = sending;
-    this.#element<HTMLButtonElement>("refresh").disabled =
+    const refreshDisabled =
       this.#documentBusy ||
       !this.#element("review-composer").hidden ||
       this.#ports.presentation.capabilities.documentTools === false;
+    this.#element<HTMLButtonElement>("refresh").disabled = refreshDisabled;
+    this.#element<HTMLButtonElement>("document-update-refresh").disabled = refreshDisabled;
     const parsed = parseCommentFeedback(field.value);
     const known = new Set(this.#allComments().map((item) => item.serial));
     const unknown = parsed.references.filter((serial) => !known.has(serial));
@@ -2528,6 +2533,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#document = reviewDocument;
     this.#lastGoodDocument = reviewDocument;
     this.#renderKey = key;
+    this.#clearDocumentUpdate();
     const title = reviewDocument.title || reviewDocument.filename || "Markdown Review";
     this.#element("title").textContent = title;
     this.#element("launcher-title").textContent = title;
@@ -2625,6 +2631,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
         if (recovered.reviewSessionId === reviewDocument.reviewSessionId) {
           throw new Error("The recovered review did not rotate the expired session");
         }
+        this.#clearDocumentUpdate();
         this.#renderDocument(recovered, generation);
         this.#toast("Review session restored.");
         return true;
@@ -2678,6 +2685,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       this.#documentUpdateCheckInFlight ||
       this.#activeLoad !== null ||
       this.#activeRecovery !== null ||
+      this.#documentUpdateAvailable ||
       this.#sendingIds.size > 0
     ) {
       return;
@@ -2698,22 +2706,21 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       ) {
         return;
       }
-      this.#setBusy(true);
-      const refreshed = await this.#ports.documents.refresh(reviewDocument.reviewSessionId);
-      if (this.#destroyed || generation !== this.#generation) return;
-      if (refreshed.path !== reviewDocument.path) {
-        throw new Error("The refreshed review did not match the open Markdown file");
-      }
-      const revisionChanged = refreshed.revision !== reviewDocument.revision;
-      this.#renderDocument(refreshed, ++this.#generation);
-      if (revisionChanged) this.#showDocumentUpdated();
+      this.#showDocumentUpdateAvailable();
     } catch (error) {
       if (this.#destroyed || generation !== this.#generation) return;
       if (isExpiredSessionError(error)) await this.#recoverExpiredSession();
       // Transient background checks stay silent and retry on the next interval.
     } finally {
       this.#documentUpdateCheckInFlight = false;
-      if (!this.#destroyed && this.#activeRecovery === null) this.#setBusy(false);
+      if (
+        !this.#destroyed &&
+        generation === this.#generation &&
+        this.#activeLoad === null &&
+        this.#activeRecovery === null
+      ) {
+        this.#setBusy(false);
+      }
     }
   }
 
@@ -2740,6 +2747,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
       try {
         const refreshed = await this.#ports.documents.refresh(sessionId);
         if (generation !== this.#generation) return false;
+        this.#clearDocumentUpdate();
         this.#renderDocument(refreshed, generation);
         return true;
       } catch (error) {
@@ -3247,6 +3255,24 @@ class MarkdownReviewController implements MarkdownReviewHandle {
             loaded ? "Reloaded from the .md file." : "The last good review is still shown.",
           );
         });
+      },
+      { signal },
+    );
+    this.#element("document-update-refresh").addEventListener(
+      "click",
+      () => {
+        void this.#refreshDocument().then((loaded) => {
+          this.#toast(
+            loaded ? "Loaded the latest .md version." : "The current review is still shown.",
+          );
+        });
+      },
+      { signal },
+    );
+    this.#element("document-update-dismiss").addEventListener(
+      "click",
+      () => {
+        this.#dismissDocumentUpdate();
       },
       { signal },
     );

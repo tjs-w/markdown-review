@@ -28,15 +28,18 @@ async function validateSkill(): Promise<void> {
   if (description.length < 20 || description.length > 1_024) {
     throw new Error("SKILL.md description must be between 20 and 1024 characters");
   }
-  if (!skill.includes("open_markdown_review")) {
-    throw new Error("SKILL.md must route Markdown review requests to open_markdown_review");
+  if (
+    !skill.includes("flowzone") ||
+    !skill.includes('plugin: "markdown-review"') ||
+    !skill.includes('action: "open"')
+  ) {
+    throw new Error("SKILL.md must route Markdown review requests through FlowZone");
   }
 }
 
 async function validatePlugin(): Promise<void> {
   const manifest = asRecord(await readJson(".codex-plugin/plugin.json"), "plugin manifest");
-  if (manifest["name"] !== "markdown-review")
-    throw new Error("Plugin name must be markdown-review");
+  if (manifest["name"] !== "flowzone") throw new Error("Plugin name must be flowzone");
   if (typeof manifest["version"] !== "string" || !manifest["version"].startsWith("0.1.0+codex.")) {
     throw new Error("Plugin version must include the Codex cachebuster");
   }
@@ -45,7 +48,10 @@ async function validatePlugin(): Promise<void> {
   }
   const mcpManifest = asRecord(await readJson(".mcp.json"), "MCP manifest");
   const servers = asRecord(mcpManifest["mcpServers"], "mcpServers");
-  const server = asRecord(servers["markdown-review"], "markdown-review MCP server");
+  if (Object.keys(servers).length !== 1) {
+    throw new Error("FlowZone must expose exactly one MCP server endpoint");
+  }
+  const server = asRecord(servers["flowzone"], "flowzone MCP server");
   if (server["command"] !== "node") throw new Error("The shipped MCP server must use Node");
   const args = server["args"];
   if (!Array.isArray(args) || args[0] !== "./server/dist/server.cjs") {
@@ -53,8 +59,8 @@ async function validatePlugin(): Promise<void> {
   }
   await Promise.all([
     access(resolve(root, "server/dist/server.cjs")),
-    access(resolve(root, "web/review.html")),
-    access(resolve(root, "web/dist/review.js")),
+    access(resolve(root, "web/flowzone.html")),
+    access(resolve(root, "web/dist/flowzone.js")),
   ]);
 }
 

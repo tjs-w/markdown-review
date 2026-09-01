@@ -58,7 +58,7 @@ function installShell(): void {
       <button id="composer-help-toggle"></button><div id="composer-help-popover" hidden></div>
       <span id="line-pill"></span><blockquote id="quote"></blockquote><textarea id="feedback"></textarea>
       <p id="feedback-message"></p><button id="add-queue"><span id="add-queue-label"></span></button></section>
-    <p id="meta"></p><span id="document-update-indicator" hidden>File updated</span><h1 id="title"></h1><h1 id="launcher-title"></h1>
+    <p id="meta"></p><div id="document-update-indicator" hidden><button id="document-update-refresh">Refresh for latest</button><button id="document-update-dismiss">Dismiss</button></div><h1 id="title"></h1><h1 id="launcher-title"></h1>
     <div id="toast"><span id="toast-message"></span><button id="toast-action" hidden></button></div><div id="selection-status"></div>`;
 }
 
@@ -1523,7 +1523,7 @@ describe("mountMarkdownReview", () => {
     handle.destroy();
   });
 
-  test("updates one active review in place and shows a tiny source-update notice", async () => {
+  test("keeps the current review visible until the latest-version prompt is activated", async () => {
     installShell();
     let checks = 0;
     let refreshes = 0;
@@ -1556,14 +1556,98 @@ describe("mountMarkdownReview", () => {
     await settle(8);
 
     expect(checks).toBeGreaterThanOrEqual(1);
-    expect(refreshes).toBe(1);
-    expect(document.getElementById("meta")?.textContent).toContain("rev latest-revision");
-    expect(document.getElementById("document-update-indicator")?.hidden).toBeFalse();
-    expect(document.getElementById("document-update-indicator")?.textContent).toContain(
-      "File updated",
+    expect(refreshes).toBe(0);
+    expect(document.getElementById("meta")?.textContent).toContain(
+      `rev ${reviewDocument.revision}`,
     );
+    expect(document.getElementById("document-update-indicator")?.hidden).toBeFalse();
+    expect(document.getElementById("document-update-refresh")?.textContent).toContain(
+      "Refresh for latest",
+    );
+    expect(document.getElementById("document")?.textContent).toContain("First paragraph");
     expect(document.getElementById("comments-panel")?.hidden).toBeFalse();
     expect(document.querySelectorAll("[data-feedback-annotation]")).toHaveLength(1);
+
+    document.getElementById("document-update-refresh")?.click();
+    await settle(8);
+
+    expect(refreshes).toBe(1);
+    expect(document.getElementById("meta")?.textContent).toContain("rev latest-revision");
+    expect(document.getElementById("document")?.textContent).toContain("Latest first paragraph");
+    expect(document.getElementById("document-update-indicator")?.hidden).toBeTrue();
+    expect(document.getElementById("comments-panel")?.hidden).toBeFalse();
+    expect(document.querySelectorAll("[data-feedback-annotation]")).toHaveLength(1);
+    handle.destroy();
+  });
+
+  test("dismisses the latest-version prompt without changing or repeatedly checking the file", async () => {
+    installShell();
+    let checks = 0;
+    let refreshes = 0;
+    const harness = createHarness({
+      checkForUpdate() {
+        checks += 1;
+        return Promise.resolve(true);
+      },
+      refresh() {
+        refreshes += 1;
+        return Promise.resolve({ ...reviewDocument, revision: "latest-revision" });
+      },
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+
+    window.dispatchEvent(new Event("focus"));
+    await settle(6);
+    expect(document.getElementById("document-update-indicator")?.hidden).toBeFalse();
+    document.getElementById("document-update-dismiss")?.click();
+    expect(document.getElementById("document-update-indicator")?.hidden).toBeTrue();
+
+    window.dispatchEvent(new Event("focus"));
+    await settle(6);
+    expect(checks).toBe(1);
+    expect(refreshes).toBe(0);
+    expect(document.getElementById("meta")?.textContent).toContain(
+      `rev ${reviewDocument.revision}`,
+    );
+    handle.destroy();
+  });
+
+  test("keeps a manual refresh busy when it supersedes an in-flight update check", async () => {
+    installShell();
+    let resolveCheck: ((changed: boolean) => void) | undefined;
+    let resolveRefresh: ((reviewDocument: ReviewDocument) => void) | undefined;
+    const refresh = new Promise<ReviewDocument>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const harness = createHarness({
+      checkForUpdate() {
+        return new Promise<boolean>((resolve) => {
+          resolveCheck = resolve;
+        });
+      },
+      refresh: () => refresh,
+    });
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+
+    window.dispatchEvent(new Event("focus"));
+    await settle();
+    const refreshButton = document.getElementById("refresh") as HTMLButtonElement;
+    refreshButton.click();
+    await settle();
+    resolveCheck?.(true);
+    await settle(5);
+
+    expect(refreshButton.disabled).toBeTrue();
+    expect(document.getElementById("document")?.getAttribute("aria-busy")).toBe("true");
+    expect(document.getElementById("document-update-indicator")?.hidden).toBeTrue();
+
+    resolveRefresh?.({ ...reviewDocument, revision: "manual-refresh" });
+    await settle(8);
+    expect(refreshButton.disabled).toBeFalse();
+    expect(document.getElementById("document")?.getAttribute("aria-busy")).toBe("false");
+    expect(document.getElementById("meta")?.textContent).toContain("rev manual-refresh");
     handle.destroy();
   });
 

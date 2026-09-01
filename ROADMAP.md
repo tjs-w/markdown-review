@@ -1,6 +1,13 @@
 # Roadmap
 
-The TypeScript migration keeps unshipped host integrations explicit rather than implying support that has not passed real-host acceptance testing.
+FlowZone keeps future plugins and unshipped host integrations explicit rather than implying support that has not passed acceptance testing.
+
+## FlowZone plugin host
+
+- Add a second bundled plugin to validate the published contracts and universal view registry against a non-document workflow.
+- Add optional app-only plugin-scoped health diagnostics without widening the single model-visible router.
+- Evaluate stronger per-adapter OS isolation for CLI plugins; the current fixed-command controls intentionally do not claim to sandbox trusted child processes.
+- Evaluate Streamable HTTP only with an explicit deployment model and the required authentication, authorization, TLS, CORS, CSRF, request-size, and rate-limit controls. Local stdio remains the shipped transport.
 
 ## 0.2.0 portability and browser acceptance
 

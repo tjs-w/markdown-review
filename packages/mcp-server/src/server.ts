@@ -1,409 +1,62 @@
-import {
-  ErrorReviewDocumentSchema,
-  ReviewDocumentRecoveryRequestSchema,
-  ReviewDocumentSummarySchema,
-  ReviewDocumentUpdateStatusSchema,
-  ReviewImageChunkRequestSchema,
-  ReviewImageChunkSummarySchema,
-  type ReviewDocumentUpdateStatus,
-} from "@markdown-review/contracts";
-import {
-  MarkdownReviewService,
-  type LoadedAssetChunk,
-  type OpenedMarkdownReview,
-} from "@markdown-review/markdown-node";
-import {
-  registerAppResource,
-  registerAppTool,
-  RESOURCE_MIME_TYPE,
-} from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
 
-import type { ReviewUiAssetLoader } from "./assets.js";
+import type { FlowZoneUiAssetLoader } from "./assets.js";
+import type { FlowZonePlugin } from "./plugin.js";
+import { createFlowZoneRegistry } from "./registry.js";
+import { registerFlowZoneAppTools, registerFlowZoneRouter } from "./router.js";
+import { registerFlowZoneUi } from "./ui-resource.js";
 
-export const MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v29.html";
-const REVIEW_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
+const MAX_VERSION_LENGTH = 64;
+const FLOWZONE_INSTRUCTIONS =
+  "FlowZone exposes one router tool backed by a fixed startup registry. Choose only plugin and action values advertised by the tool schema. Plugin skills provide workflow guidance; they are not runtime backends.";
 
-const SERVER_INSTRUCTIONS =
-  "Use open_markdown_review only to render an absolute .md or .markdown path. The Markdown file is canonical. Reuse an existing review for the same path in the current task: the active component detects source revisions and refreshes itself, so do not call open_markdown_review again after edits unless the prior review is unavailable. Review comments have stable #N serials within one queued review round and may reference earlier queued comments by serial; treat #N as a reference only when the feedback payload explicitly lists it as one, because literal #N text is supported. The component submits the full queue as one batch, clears it after a successful submission, and restarts numbering at #1. Discuss question-only items without editing and apply explicit change requests with normal filesystem tools.";
-
-export interface MarkdownReviewBackend {
-  open(path: string): Promise<OpenedMarkdownReview>;
-  loadDocument(reviewSessionId: string): Promise<OpenedMarkdownReview>;
-  checkDocument?(
-    request: z.infer<typeof ReviewDocumentRecoveryRequestSchema>,
-  ): Promise<ReviewDocumentUpdateStatus>;
-  recoverDocument?(
-    request: z.infer<typeof ReviewDocumentRecoveryRequestSchema>,
-  ): Promise<OpenedMarkdownReview>;
-  loadAssetChunk(request: z.infer<typeof ReviewImageChunkRequestSchema>): LoadedAssetChunk;
-}
-
-export interface CreateMarkdownReviewServerOptions {
-  readonly assetLoader: ReviewUiAssetLoader;
-  readonly backend?: MarkdownReviewBackend;
-  readonly version?: string;
+export interface CreateFlowZoneServerOptions {
+  readonly plugins: readonly FlowZonePlugin[];
+  readonly assetLoader: FlowZoneUiAssetLoader;
   readonly allowNativeDevTools?: boolean;
+  readonly includeLegacyMarkdownAlias?: boolean;
+  readonly version?: string;
 }
 
-export function developerModeEnabled(value: string | undefined): boolean {
-  return value === "1";
+function containsControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const code = character.codePointAt(0);
+    return code !== undefined && (code <= 0x1f || code === 0x7f);
+  });
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-type ImageLoadErrorCode =
-  | "session_expired"
-  | "stale_revision"
-  | "image_not_found"
-  | "chunk_out_of_range"
-  | "image_load_failed";
-
-interface ImageLoadError {
-  readonly code: ImageLoadErrorCode;
-  readonly message: string;
-}
-
-function classifyImageLoadError(error: unknown): ImageLoadError {
-  const message = errorMessage(error);
-  if (message === "The Markdown review session is unavailable or expired; reopen the review.") {
-    return { code: "session_expired", message };
+export function createFlowZoneServer(options: CreateFlowZoneServerOptions): McpServer {
+  const version = options.version ?? "0.1.0";
+  if (
+    version.length === 0 ||
+    version.length > MAX_VERSION_LENGTH ||
+    version.trim() !== version ||
+    containsControlCharacter(version)
+  ) {
+    throw new Error(
+      `FlowZone version must be 1-${String(MAX_VERSION_LENGTH)} trimmed characters without control characters.`,
+    );
   }
-  if (message === "The Markdown changed; refresh the review before loading its images.") {
-    return { code: "stale_revision", message };
-  }
-  if (message === "The requested image is not part of this Markdown review session.") {
-    return { code: "image_not_found", message };
-  }
-  if (message === "The requested image chunk is out of range.") {
-    return { code: "chunk_out_of_range", message };
-  }
-  return {
-    code: "image_load_failed",
-    message: "The Markdown review image could not be loaded.",
-  };
-}
-
-function safeDocumentLoadError(error: unknown): string {
-  const message = errorMessage(error);
-  return message === "The Markdown review session is unavailable or expired; reopen the review."
-    ? message
-    : "The Markdown review document could not be loaded.";
-}
-
-function documentLoadErrorMetadata(
-  error: unknown,
-):
-  | { readonly reviewError: { readonly code: "session_expired"; readonly message: string } }
-  | undefined {
-  const message = errorMessage(error);
-  return message === "The Markdown review session is unavailable or expired; reopen the review."
-    ? { reviewError: { code: "session_expired", message } }
-    : undefined;
-}
-
-export function createMarkdownReviewServer(options: CreateMarkdownReviewServerOptions): McpServer {
-  const backend = options.backend ?? new MarkdownReviewService();
+  const registry = createFlowZoneRegistry(options.plugins);
   const server = new McpServer(
-    { name: "markdown-review", version: options.version ?? "0.1.0" },
-    { capabilities: { tools: {}, resources: {} }, instructions: SERVER_INSTRUCTIONS },
-  );
-
-  registerAppResource(
-    server,
-    "markdown-review-ui",
-    MARKDOWN_REVIEW_TEMPLATE_URI,
+    { name: "flowzone", version },
     {
-      _meta: {
-        ui: {
-          prefersBorder: true,
-          csp: { connectDomains: [], resourceDomains: [] },
-          permissions: { clipboardWrite: {} },
-        },
-      },
-    },
-    async () => {
-      const { template, reviewBundle } = await options.assetLoader.load();
-      if (!template.includes(REVIEW_BUNDLE_MARKER)) {
-        throw new Error("The Markdown Review template is missing its application bundle marker.");
-      }
-      const html = template.replace(
-        REVIEW_BUNDLE_MARKER,
-        () => `<script>${reviewBundle.replaceAll("</script", "<\\/script")}</script>`,
-      );
-      const configuredHtml = options.allowNativeDevTools
-        ? html.replace("<html", '<html data-markdown-review-developer-mode="true"')
-        : html;
-      return {
-        contents: [
-          {
-            uri: MARKDOWN_REVIEW_TEMPLATE_URI,
-            mimeType: RESOURCE_MIME_TYPE,
-            text: configuredHtml,
-            _meta: {
-              ui: {
-                prefersBorder: true,
-                csp: { connectDomains: [], resourceDomains: [] },
-                permissions: { clipboardWrite: {} },
-              },
-              "openai/widgetDescription":
-                "Fullscreen rendered Markdown review with copy and queued passage, image, and whole-document feedback for the underlying source file.",
-              "openai/widgetPrefersBorder": true,
-            },
-          },
-        ],
-      };
+      capabilities: { tools: {}, resources: {} },
+      instructions: FLOWZONE_INSTRUCTIONS,
     },
   );
-
-  registerAppTool(
-    server,
-    "open_markdown_review",
-    {
-      title: "Open Markdown review",
-      description:
-        "Render a local Markdown file in an interactive review UI. Pass the absolute .md or .markdown path. The tool is read-only; the active coding agent edits the source file with its normal filesystem tools after the user submits feedback.",
-      inputSchema: {
-        path: z.string().min(1).max(4096).describe("Absolute path to a .md or .markdown file"),
-      },
-      outputSchema: ReviewDocumentSummarySchema.shape,
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
-        idempotentHint: false,
-      },
-      _meta: {
-        ui: { resourceUri: MARKDOWN_REVIEW_TEMPLATE_URI, visibility: ["model"] },
-        "openai/outputTemplate": MARKDOWN_REVIEW_TEMPLATE_URI,
-        "openai/widgetAccessible": false,
-        "openai/toolInvocation/invoking": "Opening Markdown…",
-        "openai/toolInvocation/invoked": "Markdown ready",
-      },
-    },
-    async ({ path }) => {
-      try {
-        const opened = await backend.open(path);
-        return {
-          structuredContent: opened.summary,
-          content: [
-            {
-              type: "text" as const,
-              text: `Opened ${opened.document.filename} for review (${opened.document.lineCount} lines, revision ${opened.document.revision}). The full rendered document is available only to the review component.`,
-            },
-          ],
-          _meta: { document: opened.document },
-        };
-      } catch (error: unknown) {
-        const message = errorMessage(error);
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: `Could not open Markdown review: ${message}` }],
-          _meta: {
-            document: ErrorReviewDocumentSchema.parse({
-              kind: "markdown-review-document",
-              path,
-              error: message,
-            }),
-          },
-        };
-      }
-    },
-  );
-
-  registerAppTool(
-    server,
-    "check_markdown_review_document",
-    {
-      title: "Check Markdown review document",
-      description:
-        "Check whether the canonical Markdown source changed for an active review session without creating a new rendered snapshot. This read-only tool is available only to the component UI.",
-      inputSchema: ReviewDocumentRecoveryRequestSchema.shape,
-      outputSchema: ReviewDocumentUpdateStatusSchema.shape,
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
-        idempotentHint: true,
-      },
-      _meta: {
-        ui: { visibility: ["app"] },
-        "openai/visibility": "private",
-        "openai/widgetAccessible": true,
-      },
-    },
-    async (request) => {
-      try {
-        if (!backend.checkDocument) {
-          throw new Error("Document update checks are unavailable for this Markdown review host.");
-        }
-        const status = await backend.checkDocument(request);
-        if (
-          status.reviewSessionId !== request.reviewSessionId ||
-          status.path !== request.path ||
-          status.changed !== (status.revision !== request.revision)
-        ) {
-          throw new Error("The Markdown review host returned an invalid update status.");
-        }
-        return { structuredContent: status, content: [] };
-      } catch (error: unknown) {
-        const message = safeDocumentLoadError(error);
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: message }],
-          _meta: documentLoadErrorMetadata(error),
-        };
-      }
-    },
-  );
-
-  registerAppTool(
-    server,
-    "load_markdown_review_document",
-    {
-      title: "Load Markdown review document",
-      description:
-        "Load the rendered Markdown document for an active review session. This read-only tool is available only to the component UI.",
-      inputSchema: {
-        reviewSessionId: z.uuid().describe("Opaque identifier returned to the review component"),
-      },
-      outputSchema: ReviewDocumentSummarySchema.shape,
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
-        idempotentHint: true,
-      },
-      _meta: {
-        ui: { visibility: ["app"] },
-        "openai/visibility": "private",
-        "openai/widgetAccessible": true,
-      },
-    },
-    async ({ reviewSessionId }) => {
-      try {
-        const loaded = await backend.loadDocument(reviewSessionId);
-        return {
-          structuredContent: loaded.summary,
-          content: [],
-          _meta: { document: loaded.document },
-        };
-      } catch (error: unknown) {
-        const message = safeDocumentLoadError(error);
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: message }],
-          _meta: {
-            document: ErrorReviewDocumentSchema.parse({
-              kind: "markdown-review-document",
-              reviewSessionId,
-              error: message,
-            }),
-            ...(documentLoadErrorMetadata(error) ?? {}),
-          },
-        };
-      }
-    },
-  );
-
-  registerAppTool(
-    server,
-    "recover_markdown_review_document",
-    {
-      title: "Recover Markdown review document",
-      description:
-        "Create a fresh rendered snapshot for the same Markdown path after an active component review session expires or is lost during host reconnection.",
-      inputSchema: ReviewDocumentRecoveryRequestSchema.shape,
-      outputSchema: ReviewDocumentSummarySchema.shape,
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
-        idempotentHint: false,
-      },
-      _meta: {
-        ui: { visibility: ["app"] },
-        "openai/visibility": "private",
-        "openai/widgetAccessible": true,
-      },
-    },
-    async (request) => {
-      try {
-        if (!backend.recoverDocument) {
-          throw new Error("Document recovery is unavailable for this Markdown review host.");
-        }
-        const recovered = await backend.recoverDocument(request);
-        if (
-          recovered.document.path !== request.path ||
-          recovered.document.reviewSessionId === request.reviewSessionId
-        ) {
-          throw new Error("The Markdown review host returned an invalid recovery snapshot.");
-        }
-        return {
-          structuredContent: recovered.summary,
-          content: [],
-          _meta: { document: recovered.document },
-        };
-      } catch (error: unknown) {
-        const message = safeDocumentLoadError(error);
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: message }],
-          _meta: {
-            document: ErrorReviewDocumentSchema.parse({
-              kind: "markdown-review-document",
-              path: request.path,
-              reviewSessionId: request.reviewSessionId,
-              error: message,
-            }),
-          },
-        };
-      }
-    },
-  );
-
-  registerAppTool(
-    server,
-    "load_markdown_review_image_chunk",
-    {
-      title: "Load Markdown review image chunk",
-      description:
-        "Load one bounded immutable binary chunk for an image captured by the active Markdown review session. This read-only transport tool is available only to the component UI.",
-      inputSchema: ReviewImageChunkRequestSchema.shape,
-      outputSchema: ReviewImageChunkSummarySchema.shape,
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
-        idempotentHint: true,
-      },
-      _meta: {
-        ui: { visibility: ["app"] },
-        "openai/visibility": "private",
-        "openai/widgetAccessible": true,
-      },
-    },
-    (request) => {
-      try {
-        const chunk = backend.loadAssetChunk(request);
-        return {
-          structuredContent: chunk.summary,
-          content: [],
-          _meta: { imageChunk: chunk.privateChunk },
-        };
-      } catch (error: unknown) {
-        const reviewError = classifyImageLoadError(error);
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: reviewError.message }],
-          _meta: { reviewError },
-        };
-      }
-    },
-  );
-
+  registerFlowZoneUi(server, {
+    assetLoader: options.assetLoader,
+    ...(options.allowNativeDevTools !== undefined
+      ? { allowNativeDevTools: options.allowNativeDevTools }
+      : {}),
+    ...(options.includeLegacyMarkdownAlias !== undefined
+      ? { includeLegacyMarkdownAlias: options.includeLegacyMarkdownAlias }
+      : {}),
+  });
+  registerFlowZoneRouter(server, registry);
+  registerFlowZoneAppTools(server, registry);
   return server;
 }
+
+export type { FlowZonePlugin } from "./plugin.js";

@@ -201,6 +201,15 @@ test("preserves native selection, queues feedback, and directly submits one batc
   await selectionAction.click();
   const feedback = page.locator("#feedback");
   await expect(feedback).toBeFocused();
+  await expect(feedback).toHaveAttribute("placeholder", "Prescribe a change or ask a question");
+  const composerInput = page.locator(".composer-input-row");
+  await expect(composerInput).toBeVisible();
+  expect(
+    await composerInput.evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element).borderRadius),
+    ),
+  ).toBeGreaterThanOrEqual(20);
+  await expect(composerInput.locator("svg")).toHaveCount(0);
   await feedback.fill("Clarify this statement while keeping literal \\#1.");
   await feedback.press("Shift+Enter");
   await expect(feedback).toHaveValue(/\n$/);
@@ -274,11 +283,15 @@ test("retains reviewed feedback and restores disclosure focus when the host reje
   expect(submissionCounts).toEqual({ direct: 0, reviewed: 1 });
 });
 
-test("refreshes one active review to the latest revision with a tiny update notice", async ({
+test("offers the latest revision without replacing the active review until refresh", async ({
   page,
 }) => {
   await page.goto("/?auto-update=1");
-  await expect(page.getByText("Select and review this paragraph.", { exact: true })).toBeVisible();
+  await expect(
+    page.locator("#document .review-block p", {
+      hasText: "Select and review this paragraph.",
+    }),
+  ).toBeVisible();
   await queueFirstParagraph(page, "Keep this queued across the source update");
   await page.locator("#comments-toggle").click();
   await expect(page.locator("#comments-panel")).toBeVisible();
@@ -295,19 +308,23 @@ test("refreshes one active review to the latest revision with a tiny update noti
   });
 
   const updateNotice = page.locator("#document-update-indicator");
-  await Promise.all([
-    expect(page.getByText("Latest source revision is visible.", { exact: true })).toBeVisible(),
-    expect(page.locator("#meta")).toContainText("rev browser-latest-revision"),
-    expect(updateNotice).toBeVisible(),
-  ]);
-  await expect(updateNotice).toHaveText("File updated");
-  expect(
-    await updateNotice.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
-  ).toBeLessThanOrEqual(10);
+  await expect(updateNotice).toBeVisible();
+  await expect(page.getByRole("button", { name: "Refresh for latest" })).toBeVisible();
+  await expect(
+    page.locator("#document .review-block p", {
+      hasText: "Select and review this paragraph.",
+    }),
+  ).toBeVisible();
+  await expect(page.locator("#meta")).not.toContainText("browser-latest-revision");
   await expect(page.locator("#comments-panel")).toBeVisible();
   await expect(page.locator("[data-feedback-annotation]")).toHaveCount(1);
+  const updatePromptResults = await new AxeBuilder({ page })
+    .include("#document-update-indicator")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(updatePromptResults.violations).toEqual([]);
 
-  const updateCalls = await page.evaluate(() => {
+  const callsBeforeRefresh = await page.evaluate(() => {
     const host = (
       window as Window & {
         __markdownReviewHost?: { toolCalls: { name?: string }[] };
@@ -315,8 +332,58 @@ test("refreshes one active review to the latest revision with a tiny update noti
     ).__markdownReviewHost;
     return (host?.toolCalls ?? []).map((call) => call.name);
   });
-  expect(updateCalls.filter((name) => name === "check_markdown_review_document").length).toBe(1);
-  expect(updateCalls.filter((name) => name === "load_markdown_review_document").length).toBe(1);
+  expect(
+    callsBeforeRefresh.filter((name) => name === "check_markdown_review_document").length,
+  ).toBe(1);
+  expect(callsBeforeRefresh.filter((name) => name === "load_markdown_review_document").length).toBe(
+    0,
+  );
+
+  await page.getByRole("button", { name: "Refresh for latest" }).click();
+  await Promise.all([
+    expect(page.getByText("Latest source revision is visible.", { exact: true })).toBeVisible(),
+    expect(page.locator("#meta")).toContainText("rev browser-latest-revision"),
+    expect(updateNotice).toBeHidden(),
+  ]);
+  await expect(page.locator("#comments-panel")).toBeVisible();
+  await expect(page.locator("[data-feedback-annotation]")).toHaveCount(1);
+
+  const callsAfterRefresh = await page.evaluate(() => {
+    const host = (
+      window as Window & {
+        __markdownReviewHost?: { toolCalls: { name?: string }[] };
+      }
+    ).__markdownReviewHost;
+    return (host?.toolCalls ?? []).map((call) => call.name);
+  });
+  expect(callsAfterRefresh.filter((name) => name === "load_markdown_review_document").length).toBe(
+    1,
+  );
+});
+
+test("dismisses the latest-version prompt without replacing the current revision", async ({
+  page,
+}) => {
+  await page.goto("/?auto-update=1");
+  await page.evaluate(() => {
+    const host = (
+      window as Window & {
+        __markdownReviewHost?: { documentUpdateAvailable: boolean };
+      }
+    ).__markdownReviewHost;
+    if (!host) throw new Error("Expected the Markdown Review browser host");
+    host.documentUpdateAvailable = true;
+    window.dispatchEvent(new Event("focus"));
+  });
+
+  await page.getByRole("button", { name: "Dismiss latest-version notice" }).click();
+  await expect(page.locator("#document-update-indicator")).toBeHidden();
+  await expect(
+    page.locator("#document .review-block p", {
+      hasText: "Select and review this paragraph.",
+    }),
+  ).toBeVisible();
+  await expect(page.locator("#meta")).not.toContainText("browser-latest-revision");
 });
 
 test("keeps the selection action at the directional endpoint through scrolling and reflow", async ({

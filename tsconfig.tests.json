@@ -15,6 +15,7 @@
     "tests/**/*.ts"
   ],
   "references": [
+    { "path": "./packages/flowzone-contracts" },
     { "path": "./packages/contracts" },
     { "path": "./packages/core" },
     { "path": "./packages/markdown-node" },

@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": [],
+    "rootDir": ".",
+    "outDir": "../../.build/types/flowzone-contracts",
+    "tsBuildInfoFile": "../../.build/types/flowzone-contracts.tsbuildinfo"
+  },
+  "include": ["src/index.ts"]
+}

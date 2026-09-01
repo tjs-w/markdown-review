@@ -7,7 +7,7 @@ import type {
   ReviewImageDecoder,
 } from "@markdown-review/review-ui";
 
-import { startMarkdownReviewRuntime } from "./browser-runtime";
+import { startFlowZoneRuntime } from "./browser-runtime";
 import type { McpAppsHost, McpAppsHostOptions } from "./mcp-apps-host";
 
 const documentFixture = {
@@ -28,6 +28,14 @@ const documentFixture = {
 describe("browser composition runtime", () => {
   test("surfaces errors, retries, hydrates, decodes, tears down, and closes", async () => {
     const hostWindow = window;
+    hostWindow.document.body.innerHTML = `
+      <div id="launcher"></div>
+      <div class="full-surface"></div>
+      <main id="flowzone-generic" hidden>
+        <h1 id="flowzone-generic-title"></h1>
+        <p id="flowzone-generic-message"></p>
+      </main>
+    `;
     const imageDecoder: ReviewImageDecoder = {
       decode: () => Promise.resolve({ width: 1, height: 1, data: new Uint8ClampedArray(4) }),
     };
@@ -80,7 +88,7 @@ describe("browser composition runtime", () => {
     const originalConsoleError = console.error;
     console.error = consoleError;
     try {
-      const runtime = startMarkdownReviewRuntime({
+      const runtime = startFlowZoneRuntime({
         hostWindow,
         createHost,
         imageDecoder,
@@ -92,8 +100,28 @@ describe("browser composition runtime", () => {
       shownErrors[0]?.retry?.();
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       expect(connectCount).toBe(2);
-      await hostOptions?.onDocument(documentFixture);
+      await hostOptions?.onView?.({
+        schema: "flowzone/ui-v1",
+        plugin: "markdown-review",
+        action: "open",
+        view: "review",
+        payload: documentFixture,
+      });
       expect(opened).toEqual([documentFixture]);
+      await hostOptions?.onView?.({
+        schema: "flowzone/ui-v1",
+        plugin: "fixture",
+        action: "run",
+        view: "result",
+        payload: { title: "Fixture complete", message: "The action completed." },
+      });
+      expect(hostWindow.document.getElementById("flowzone-generic")?.hidden).toBe(false);
+      expect(hostWindow.document.getElementById("flowzone-generic-title")?.textContent).toBe(
+        "Fixture complete",
+      );
+      expect(hostWindow.document.getElementById("flowzone-generic-message")?.textContent).toBe(
+        "The action completed.",
+      );
       expect(mountOptions?.ports).toBe(ports);
       expect(mountOptions?.allowNativeDevTools).toBe(true);
       expect(hostOptions?.submissionFormatter).toBeUndefined();
@@ -114,6 +142,7 @@ describe("browser composition runtime", () => {
       expect(closeCount).toBe(1);
     } finally {
       console.error = originalConsoleError;
+      hostWindow.document.body.replaceChildren();
     }
   });
 });

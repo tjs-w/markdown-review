@@ -17,10 +17,10 @@ async function installShippingArtifacts(pluginRoot: string): Promise<void> {
       join(sourceRoot, "server", "dist", "server.cjs"),
       join(pluginRoot, "server", "dist", "server.cjs"),
     ),
-    copyFile(join(sourceRoot, "web", "review.html"), join(pluginRoot, "web", "review.html")),
+    copyFile(join(sourceRoot, "web", "flowzone.html"), join(pluginRoot, "web", "flowzone.html")),
     copyFile(
-      join(sourceRoot, "web", "dist", "review.js"),
-      join(pluginRoot, "web", "dist", "review.js"),
+      join(sourceRoot, "web", "dist", "flowzone.js"),
+      join(pluginRoot, "web", "dist", "flowzone.js"),
     ),
   ]);
 }
@@ -51,15 +51,20 @@ describe("isolated shipping package", () => {
     });
     await client.connect(transport);
     try {
+      expect(client.getServerVersion()?.name).toBe("flowzone");
       expect((await client.listTools()).tools).toHaveLength(5);
-      const resource = await client.readResource({ uri: "ui://markdown-review/v29.html" });
+      const resource = await client.readResource({ uri: "ui://flowzone/v1.html" });
       const content = resource.contents[0];
       expect(content && "text" in content ? content.text : "").toContain(">Submit<");
       expect(
         (
           await client.callTool({
-            name: "open_markdown_review",
-            arguments: { path: markdownPath },
+            name: "flowzone",
+            arguments: {
+              plugin: "markdown-review",
+              action: "open",
+              input: { path: markdownPath },
+            },
           })
         ).isError,
       ).toBeUndefined();
@@ -76,8 +81,8 @@ describe("isolated shipping package", () => {
     await mkdir(join(pluginRoot, "web", "dist"), { recursive: true });
     await Promise.all([
       writeFile(join(pluginRoot, "server", "dist", "server.cjs"), "throw new Error('old');\n"),
-      writeFile(join(pluginRoot, "web", "review.html"), "<title>Old review</title>\n"),
-      writeFile(join(pluginRoot, "web", "dist", "review.js"), "old\n"),
+      writeFile(join(pluginRoot, "web", "flowzone.html"), "<title>Old review</title>\n"),
+      writeFile(join(pluginRoot, "web", "dist", "flowzone.js"), "old\n"),
     ]);
 
     await installShippingArtifacts(pluginRoot);
@@ -91,10 +96,10 @@ describe("isolated shipping package", () => {
     });
     await client.connect(transport);
     try {
-      const resource = await client.readResource({ uri: "ui://markdown-review/v29.html" });
+      const resource = await client.readResource({ uri: "ui://flowzone/v1.html" });
       const content = resource.contents[0];
       const html = content && "text" in content ? content.text : "";
-      expect(html).toContain("<title>Markdown Review</title>");
+      expect(html).toContain("<title>FlowZone</title>");
       expect(html).toContain(">Submit<");
       expect(html).not.toContain("Old review");
     } finally {

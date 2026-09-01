@@ -53,17 +53,21 @@ const transport = new StdioClientTransport({
   cwd: pluginRoot,
   stderr: "pipe",
 });
-const client = new Client({ name: "markdown-review-browser-harness", version: "0.1.0" });
+const client = new Client({ name: "flowzone-browser-harness", version: "0.1.0" });
 await client.connect(transport);
 
-const resource = await client.readResource({ uri: "ui://markdown-review/v29.html" });
+const resource = await client.readResource({ uri: "ui://flowzone/v1.html" });
 const resourceContent = resource.contents[0];
 if (!resourceContent || !("text" in resourceContent)) {
   throw new Error("The Markdown Review HTML resource was not returned");
 }
 const opened = await client.callTool({
-  name: "open_markdown_review",
-  arguments: { path: markdownPath },
+  name: "flowzone",
+  arguments: {
+    plugin: "markdown-review",
+    action: "open",
+    input: { path: markdownPath },
+  },
 });
 if (opened.isError) throw new Error("Could not open the browser-harness Markdown fixture");
 
@@ -93,11 +97,10 @@ const hostScript = `<script>
   const updatedResult = {
     ...initialResult,
     structuredContent: {
-      ...initialResult.structuredContent,
+      ...initialResult.structuredContent.result,
       revision: updatedReviewDocument.revision
     },
     _meta: {
-      ...initialResult._meta,
       document: updatedReviewDocument
     }
   };
@@ -200,7 +203,7 @@ const hostScript = `<script>
       if (request.method === "ui/initialize") {
         result = {
           protocolVersion: "2026-01-26",
-          hostInfo: { name: "markdown-review-browser-harness", version: "0.1.0" },
+          hostInfo: { name: "flowzone-browser-harness", version: "0.1.0" },
           hostCapabilities: {
             openLinks: {},
             serverTools: {},
@@ -349,7 +352,7 @@ await new Promise<void>((resolveListen, rejectListen) => {
 });
 const address = server.address();
 const port = typeof address === "object" && address ? address.port : requestedPort;
-process.stdout.write(`Markdown Review browser harness: http://127.0.0.1:${String(port)}\n`);
+process.stdout.write(`FlowZone browser harness: http://127.0.0.1:${String(port)}\n`);
 
 async function shutdown(): Promise<void> {
   await new Promise<void>((resolveClose, rejectClose) => {

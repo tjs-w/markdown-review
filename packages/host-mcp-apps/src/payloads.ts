@@ -1,3 +1,4 @@
+import { FlowZoneUiEnvelopeBaseSchema, type FlowZoneUiEnvelopeBase } from "@flowzone/contracts";
 import {
   PrivateReviewImageChunkSchema,
   ReviewDocumentSchema,
@@ -27,6 +28,15 @@ export interface ToolPayloadFailure {
 }
 
 export type ToolPayloadResult<T> = ToolPayloadSuccess<T> | ToolPayloadFailure;
+
+export function findFlowZoneUiEnvelope(value: unknown): FlowZoneUiEnvelopeBase | null {
+  const direct = FlowZoneUiEnvelopeBaseSchema.safeParse(value);
+  if (direct.success) return direct.data;
+  const record = asRecord(value);
+  const meta = asRecord(record?.["_meta"]);
+  const parsed = FlowZoneUiEnvelopeBaseSchema.safeParse(meta?.["flowzone"]);
+  return parsed.success ? parsed.data : null;
+}
 
 function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -250,6 +260,15 @@ export function parsePrivateImageChunkToolResult(
 }
 
 export function findReviewDocument(value: unknown): ReviewDocument | null {
+  const envelope = findFlowZoneUiEnvelope(value);
+  if (
+    envelope?.plugin === "markdown-review" &&
+    envelope.action === "open" &&
+    envelope.view === "review"
+  ) {
+    const document = ReviewDocumentSchema.safeParse(envelope.payload);
+    if (document.success) return document.data;
+  }
   const direct = ReviewDocumentSchema.safeParse(value);
   if (direct.success) return direct.data;
   const record = asRecord(value);

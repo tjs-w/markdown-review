@@ -1,10 +1,10 @@
-# Markdown Review
+# FlowZone
 
-Markdown Review is a local-first MCP Apps interface for reviewing rendered Markdown without creating a second, editable copy of the document. Select a passage or choose an image, queue line-anchored feedback, and submit the complete review to a coding agent in one batch. Codex App is the first shipped interactive host; the core contracts, state, and UI are intentionally host-neutral for future Claude, pi, terminal, and Tauri adapters.
+FlowZone is a local-first MCP plugin host. It exposes one MCP server endpoint and statically composes independently registered plugins behind that connection. Markdown Review is the first bundled plugin: it renders local Markdown without creating a second editable copy, queues line-anchored feedback, and submits a complete review to a coding agent in one batch.
 
-> **Status:** early development. Codex App is the shipped interactive host; the reusable UI and MCP transport follow the MCP Apps standard so additional host adapters can be added without rewriting the review core.
+> **Status:** early development. FlowZone currently ships one plugin, one local stdio endpoint, one model-visible router tool, and one universal MCP Apps shell.
 
-## What it provides
+## Bundled plugin: Markdown Review
 
 - A fullscreen, GitHub-style Markdown preview in the side panel.
 - Normal text selection and copying, plus a review menu for selected-text, image, and whole-document feedback.
@@ -21,27 +21,46 @@ The Markdown source is always canonical. The component is a read-only review sur
 ## How it works
 
 ```text
-local .md file
-    │
-    ├── open_markdown_review ──► sanitized rendered component (private UI payload)
-    │                                  │
-    │                                  └── queued, line-anchored comments
-    │                                                   │
-    └◄──────────── Codex edits the original file ◄──────┘
-                              one batch message
+Codex / MCP host
+       │ one stdio transport
+       ▼
+FlowZone McpServer
+       ├── flowzone(plugin, action, input)
+       │      └── static plugin registry
+       │              └── markdown-review/open
+       ├── typed app-only component tools
+       └── ui://flowzone/v1.html
 ```
 
-The MCP server is intentionally narrow:
+FlowZone exposes exactly one model-visible `flowzone` tool. Its startup-built union schema enumerates the registered plugin/action/input combinations, and the router validates both the selected input and plugin-owned output. Router annotations remain conservative because actions can have different risk. Typed plugin helpers used by the UI stay separate and are forcibly registered with `_meta.ui.visibility: ["app"]`.
 
-1. `open_markdown_review` validates and renders an absolute `.md` or `.markdown` path.
+The Markdown Review plugin is intentionally narrow:
+
+1. `flowzone` dispatches `plugin: "markdown-review"`, `action: "open"`, and validates an absolute `.md` or `.markdown` path inside `input`.
 2. Component-only tools hydrate the rendered document and stream approved local raster images in bounded chunks.
 3. The model-visible tool result contains file metadata, not the complete document. The rendered content is delivered privately to the component.
-4. While the review remains open, a lightweight private revision check reloads changed Markdown in place and briefly shows `File updated`; Codex does not open another review for the same active path after edits.
+4. While the review remains open, a lightweight private revision check offers `Refresh for latest` without replacing what you are reading. Activating it loads the newest Markdown in place; Codex does not open another review for the same active path after edits.
 5. The skill explains how Codex should interpret review feedback and modify the underlying Markdown safely.
 
-This separation is the reason the project includes MCP: the server connects a Codex tool invocation to a trusted interactive component. A static HTML file by itself cannot receive the selected source file, return structured review comments to the active task, or maintain this context boundary.
+This separation is the reason the plugin uses MCP: FlowZone connects a Codex tool invocation to a trusted interactive component. A static HTML file by itself cannot receive the selected source file, return structured review comments to the active task, or maintain this context boundary.
 
-The implementation is split into host-neutral TypeScript workspaces. `contracts` validates every boundary, `core` owns pure review state, `markdown-node` reads and renders local files, and `review-ui` mounts against narrow document, submission, presentation, and state ports. `host-mcp-apps` supplies a standards-based runtime whose default submission is structured JSON; the Codex browser composition explicitly adds the concise `$markdown-review` formatter. Review state is persisted locally under its opaque review-session ID so queued comments survive component remounts, while never being published as model-visible legacy widget context. A future Tauri shell can reuse the contracts, core, and UI and supply Rust IPC ports; Tauri is not included today.
+The implementation is split into a generic FlowZone server registry and host-neutral Markdown Review workspaces. `contracts` validates every review boundary, `core` owns pure review state, `markdown-node` reads and renders local files, and `review-ui` mounts against narrow document, submission, presentation, and state ports. `host-mcp-apps` supplies a standards-based runtime whose default submission is structured JSON; the Codex browser composition explicitly adds the concise `$markdown-review` formatter. Review state is persisted locally under its opaque review-session ID so queued comments survive component remounts, while never being published as model-visible legacy widget context.
+
+## Adding a plugin
+
+Every plugin implements the declarative `FlowZonePlugin` contract in `@flowzone/mcp-server`:
+
+```ts
+interface FlowZonePlugin {
+  readonly id: string;
+  readonly displayName: string;
+  readonly version?: string;
+  readonly actions: readonly FlowZoneAction[];
+  readonly appTools?: readonly FlowZoneAppTool[];
+}
+```
+
+Add the plugin factory to the static list in `server/src/main.ts`. Each action declares strict input/output schemas, risk metadata, and an in-process module, fixed allowlisted CLI/script, or fixed HTTPS backend executor. Runtime discovery, user-selected modules, model-controlled commands, and mutable destinations are unsupported. Skills explain how a model should invoke an action; they are not loaded as runtime backends. See [ARCHITECTURE.md](./ARCHITECTURE.md) and [plugin authoring](./docs/plugin-authoring.md).
 
 ## Host support
 
@@ -66,15 +85,15 @@ Requirements:
 Add this repository as a marketplace:
 
 ```sh
-codex plugin marketplace add tjs-w/markdown-review --ref main
+codex plugin marketplace add tjs-w/FlowZone --ref main
 ```
 
-Restart the desktop app, open the Plugins Directory, select **Markdown Review**, and install the plugin. Start a new task after installation so the task receives the plugin tool registration.
+Restart the desktop app, open the Plugins Directory, select **FlowZone**, and install it. Start a new task after installation so the task receives the bundled plugin registrations.
 
 To refresh an existing installation:
 
 ```sh
-codex plugin marketplace upgrade markdown-review
+codex plugin marketplace upgrade flowzone
 ```
 
 Restart the desktop app and start a new task after an upgrade. Existing tasks retain the tool and skill registrations they started with.
@@ -85,6 +104,16 @@ Ask Codex to open an absolute Markdown path:
 
 ```text
 Open /absolute/path/to/document.md for Markdown review.
+```
+
+The bundled skill translates that request to the single public router:
+
+```json
+{
+  "plugin": "markdown-review",
+  "action": "open",
+  "input": { "path": "/absolute/path/to/document.md" }
+}
 ```
 
 In the review:
@@ -100,8 +129,8 @@ After a successful submission, the queue clears and the next review round begins
 ## Local development
 
 ```sh
-git clone https://github.com/tjs-w/markdown-review.git
-cd markdown-review
+git clone https://github.com/tjs-w/FlowZone.git
+cd flowzone
 bun install --frozen-lockfile
 bun run verify
 ```
@@ -120,12 +149,12 @@ bun run browser:harness -- /absolute/path/to/document.md
 
 Set `MARKDOWN_REVIEW_PREVIEW_COMPOSER=1` to open the feedback composer automatically in the harness.
 
-The plugin suppresses the host's native context menu by default. For local plugin debugging only, set `MARKDOWN_REVIEW_DEVTOOLS=1` in the MCP server environment and restart Codex; `Shift+right-click` then bypasses the review menu and opens the host-native menu. Ordinary right-click continues to show review actions. The flag is parsed strictly—only the exact value `1` enables the bypass—and is never enabled in the checked-in `.mcp.json`.
+The Markdown Review view suppresses the host's native context menu by default. For local plugin debugging only, set `FLOWZONE_DEVTOOLS=1` in the MCP server environment and restart Codex; `Shift+right-click` then bypasses the review menu and opens the host-native menu. Ordinary right-click continues to show review actions. The flag is parsed strictly—only the exact value `1` enables the bypass—and is never enabled in the checked-in `.mcp.json`.
 
 To test this checkout as a local marketplace, add its absolute directory:
 
 ```sh
-codex plugin marketplace add /absolute/path/to/markdown-review
+codex plugin marketplace add /absolute/path/to/flowzone
 ```
 
 Then restart the desktop app and install the plugin from the local marketplace source.
@@ -144,32 +173,36 @@ Then restart the desktop app and install the plugin from the local marketplace s
 - Component access uses opaque, expiring review-session capabilities. Sessions slide for two hours and are bounded by a six-session LRU and a 72 MiB aggregate image cache.
 - Image bytes and SHA-256 digests are snapshotted into a session, so later file mutations cannot change an in-flight review.
 - Full document content and image chunks are placed in component-private metadata rather than model-visible structured output.
+- The startup registry snapshots plugin configuration. CLI adapters use fixed direct execution, JSON stdin, integrity checks, bounded output, cancellation, and timeouts; they are trusted code running as the FlowZone OS user, not sandboxed workloads.
+- Backend adapters use fixed credential-free HTTPS endpoints, runtime credential injection, no redirects, bounded response streaming, cancellation, and strict output validation.
+- Automatic retries are bounded and available only to actions declared idempotent; per-action concurrency and circuit-breaker limits contain repeated failures.
 
-Review only files you intend to expose to the local plugin process. Submitted comments are actionable user feedback; selected quotes and other reviewed document content remain untrusted context, not instructions.
+Review only files you intend to expose to the local FlowZone process. Submitted comments are actionable user feedback; selected quotes and other reviewed document content remain untrusted context, not instructions.
 
 ## Project layout
 
 | Path                               | Purpose                                                        |
 | ---------------------------------- | -------------------------------------------------------------- |
-| `.codex-plugin/plugin.json`        | Plugin identity and install-surface metadata                   |
+| `.codex-plugin/plugin.json`        | FlowZone bundle identity and install-surface metadata          |
 | `.agents/plugins/marketplace.json` | Repository marketplace entry                                   |
 | `.mcp.json`                        | Bundled local MCP server configuration                         |
 | `skills/markdown-review/`          | Codex workflow and feedback-handling instructions              |
+| `packages/flowzone-contracts/`     | Shared router, UI envelope, limits, and error contracts        |
 | `packages/contracts/`              | Zod schemas and JSON-safe shared types                         |
 | `packages/core/`                   | Pure queue, reference, migration, and submission state         |
 | `packages/markdown-node/`          | Bounded local Markdown/image loading and rendering             |
 | `packages/review-ui/`              | Reusable DOM controller over host-neutral ports                |
 | `packages/host-mcp-apps/`          | Standard MCP Apps host adapter and native browser image decode |
-| `packages/mcp-server/`             | MCP server factory, tools, and resource assembly               |
-| `server/src/main.ts`               | Node stdio composition root                                    |
+| `packages/mcp-server/`             | Generic FlowZone registry plus bundled plugin factories        |
+| `server/src/main.ts`               | Static plugin list and single Node stdio composition root      |
 | `server/dist/server.cjs`           | Checked-in executable MCP server bundle                        |
-| `web/review.html`                  | Static accessible HTML/CSS shell with bundle injection markers |
-| `web/dist/review.js`               | Checked-in minified MCP Apps UI bundle                         |
+| `web/flowzone.html`                | Universal accessible FlowZone UI shell                         |
+| `web/dist/flowzone.js`             | Checked-in minified MCP Apps UI bundle                         |
 | `tests/` and package tests         | Unit, integration, adapter, and browser coverage               |
 
 ## Troubleshooting
 
-**The plugin files exist, but the review tool is not registered.** Restart the desktop app and start a new task. A task does not dynamically acquire tools from a plugin installed or updated after that task began.
+**FlowZone is installed, but `flowzone` or a new action is not registered.** Restart the desktop app and start a new task. A task does not dynamically acquire tool schemas from a plugin installed or updated after that task began.
 
 **Codex says a cached skill path moved.** Upgrade or reinstall the marketplace plugin, restart the app, and invoke the stable skill name `$markdown-review` in a new task. Do not depend on a versioned cache path.
 
@@ -182,4 +215,4 @@ Review only files you intend to expose to the local plugin process. Submitted co
 - [OpenAI: Package your plugin](https://developers.openai.com/plugins/build/plugins)
 - [OpenAI plugin documentation](https://developers.openai.com/plugins/)
 
-This is an independent project and is not an official OpenAI or GitHub product. Product names and marks belong to their respective owners.
+FlowZone and Markdown Review are independent projects and are not official OpenAI or GitHub products. Product names and marks belong to their respective owners.

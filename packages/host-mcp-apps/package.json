@@ -13,6 +13,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@flowzone/contracts": "workspace:*",
     "@markdown-review/contracts": "workspace:*",
     "@markdown-review/core": "workspace:*",
     "@markdown-review/review-ui": "workspace:*",

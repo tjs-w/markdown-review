@@ -17,8 +17,8 @@ import { createFileReviewUiAssetLoader } from "../src/assets.js";
 import {
   createMarkdownReviewServer,
   developerModeEnabled,
-  MARKDOWN_REVIEW_TEMPLATE_URI,
-} from "../src/server.js";
+} from "../src/plugins/markdown-review.js";
+import { FLOWZONE_TEMPLATE_URI } from "../src/ui-resource.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -137,7 +137,7 @@ describe("createMarkdownReviewServer", () => {
     try {
       const tools = await client.listTools();
       expect(tools.tools.map((tool) => tool.name)).toEqual([
-        "open_markdown_review",
+        "flowzone",
         "check_markdown_review_document",
         "load_markdown_review_document",
         "recover_markdown_review_document",
@@ -150,17 +150,33 @@ describe("createMarkdownReviewServer", () => {
       const resources = await client.listResources();
       expect(resources.resources[0]?._meta?.["ui"]).toEqual({
         prefersBorder: true,
-        csp: { connectDomains: [], resourceDomains: [] },
+        csp: { connectDomains: [], resourceDomains: [], frameDomains: [] },
         permissions: { clipboardWrite: {} },
       });
 
       const result = await client.callTool({
-        name: "open_markdown_review",
-        arguments: { path: summary.path },
+        name: "flowzone",
+        arguments: {
+          plugin: "markdown-review",
+          action: "open",
+          input: { path: summary.path },
+        },
       });
-      expect(result.structuredContent).toEqual(summary);
+      expect(result.structuredContent).toEqual({
+        schema: "flowzone/result-v1",
+        plugin: "markdown-review",
+        action: "open",
+        result: summary,
+      });
       expect(JSON.stringify(result.structuredContent)).not.toContain(reviewSessionId);
       expect(result._meta?.["document"]).toEqual(document);
+      expect(result._meta?.["flowzone"]).toEqual({
+        schema: "flowzone/ui-v1",
+        plugin: "markdown-review",
+        action: "open",
+        view: "review",
+        payload: document,
+      });
 
       const checked = await client.callTool({
         name: "check_markdown_review_document",
@@ -261,7 +277,7 @@ describe("createMarkdownReviewServer", () => {
       });
       expect(JSON.stringify(failedRecovery.content)).not.toContain("/Users/example/private.md");
 
-      const resource = await client.readResource({ uri: MARKDOWN_REVIEW_TEMPLATE_URI });
+      const resource = await client.readResource({ uri: FLOWZONE_TEMPLATE_URI });
       const resourceContent = resource.contents[0];
       const html = resourceContent && "text" in resourceContent ? resourceContent.text : "";
       expect(html).toContain('data-markdown-review-developer-mode="true"');
@@ -270,7 +286,7 @@ describe("createMarkdownReviewServer", () => {
       expect(html).toContain("<\\/script");
       expect(resourceContent?._meta?.["ui"]).toEqual({
         prefersBorder: true,
-        csp: { connectDomains: [], resourceDomains: [] },
+        csp: { connectDomains: [], resourceDomains: [], frameDomains: [] },
         permissions: { clipboardWrite: {} },
       });
     } finally {
@@ -368,7 +384,7 @@ describe("createMarkdownReviewServer", () => {
       expect(JSON.stringify(unknown)).not.toContain(summary.path);
       expect(JSON.stringify(unknown)).not.toContain(reviewSessionId);
 
-      const resource = await client.readResource({ uri: MARKDOWN_REVIEW_TEMPLATE_URI });
+      const resource = await client.readResource({ uri: FLOWZONE_TEMPLATE_URI });
       const content = resource.contents[0];
       expect(content && "text" in content ? content.text : "").not.toContain(
         "data-markdown-review-developer-mode",

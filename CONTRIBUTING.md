@@ -1,6 +1,6 @@
-# Contributing
+# Contributing to FlowZone
 
-Contributions to Markdown Review should preserve one core invariant: the `.md` or `.markdown` file is the only canonical document. The review component renders and annotates it but never writes an HTML mirror or edits the source directly.
+FlowZone contributions should preserve the single-server plugin boundary in [ARCHITECTURE.md](./ARCHITECTURE.md). Markdown Review contributions also preserve one core invariant: the `.md` or `.markdown` file is the only canonical document. The review component renders and annotates it but never writes an HTML mirror or edits the source directly.
 
 ## Development workflow
 
@@ -9,9 +9,9 @@ Contributions to Markdown Review should preserve one core invariant: the `.md` o
 3. Make source changes in `packages/`, `server/src/`, `web/src/`, `skills/`, or `tests/`.
 4. Run `bun run verify`, then `bun run build` when checked-in artifacts changed.
 5. If UI behavior changed, run the browser harness and inspect keyboard, pointer, light-theme, and dark-theme behavior.
-6. Include updated `server/dist/server.cjs` and `web/dist/review.js` output when their source changes.
+6. Include updated `server/dist/server.cjs` and `web/dist/flowzone.js` output when their source changes.
 
-Keep reusable packages host-neutral: `review-ui` must not import Node, MCP, Codex, or Tauri APIs. Host-specific behavior belongs in an adapter behind the documented ports. Validate data received across host, persisted-state, document, and image boundaries before use.
+Keep reusable packages host-neutral: `review-ui` must not import Node, MCP, Codex, or Tauri APIs. Host-specific behavior belongs in an adapter behind the documented ports. New FlowZone plugins use the declarative contract and static composition root; they never receive the raw MCP server. Preserve the single model-visible router, register UI helpers app-only, and retain plugin ownership of schemas and domain trust boundaries. Validate data received across router, executor, host, persisted-state, document, and image boundaries before use.
 
 ## Design constraints
 

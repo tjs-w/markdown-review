@@ -22,6 +22,7 @@ import type {
 import { ReviewPortError } from "@markdown-review/review-ui";
 
 import {
+  findFlowZoneUiEnvelope,
   findReviewDocument,
   parsePrivateImageChunkToolResult,
   parseReviewDocumentToolResult,
@@ -37,7 +38,10 @@ export interface McpAppsHostOptions {
    * non-iframe embedders. Browser builds should leave this unset.
    */
   readonly transport?: Parameters<App["connect"]>[0];
-  readonly onDocument: (document: ReviewDocument) => void | Promise<void>;
+  readonly onView?: (
+    envelope: NonNullable<ReturnType<typeof findFlowZoneUiEnvelope>>,
+  ) => void | Promise<void>;
+  readonly onDocument?: (document: ReviewDocument) => void | Promise<void>;
   readonly onError?: (error: Error) => void;
   readonly onTeardown?: () => void | Promise<void>;
   readonly submissionFormatter?: (submission: ReviewSubmission) => string;
@@ -186,7 +190,7 @@ function copyTextWithLegacyCommand(hostWindow: Window, text: string): boolean {
 export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
   const hostWindow = options.hostWindow ?? window;
   const app = new App(
-    { name: "markdown-review", version: "0.1.0" },
+    { name: "flowzone", version: "0.1.0" },
     { availableDisplayModes: ["inline", "fullscreen"] },
     { strict: true, allowUnsafeEval: false, autoResize: false },
   );
@@ -206,13 +210,23 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
     options.onError?.(asError(error));
   };
   const acceptUnknownPayload = (value: unknown): boolean => {
+    const envelope = findFlowZoneUiEnvelope(value);
     const reviewDocument = findReviewDocument(value);
-    if (!reviewDocument) return false;
+    if (!envelope && !reviewDocument) return false;
     if (acceptedInitialSessionId || pendingInitialSessionId) return true;
-    pendingInitialSessionId = reviewDocument.reviewSessionId;
-    void Promise.resolve(options.onDocument(reviewDocument))
+    const sessionId =
+      reviewDocument?.reviewSessionId ??
+      `${envelope?.plugin ?? "unknown"}:${envelope?.action ?? "unknown"}:${envelope?.view ?? "unknown"}`;
+    pendingInitialSessionId = sessionId;
+    const handled =
+      envelope && options.onView
+        ? options.onView(envelope)
+        : reviewDocument && options.onDocument
+          ? options.onDocument(reviewDocument)
+          : Promise.reject(new Error("No FlowZone UI view handler is registered."));
+    void Promise.resolve(handled)
       .then(() => {
-        acceptedInitialSessionId = reviewDocument.reviewSessionId;
+        acceptedInitialSessionId = sessionId;
       })
       .catch(reportError)
       .finally(() => {
@@ -241,7 +255,7 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
   });
   app.addEventListener("toolresult", (params) => {
     if (!acceptUnknownPayload(params) && !acceptedInitialSessionId) {
-      reportError(new Error("The Markdown Review host returned an invalid document payload"));
+      reportError(new Error("The FlowZone host returned an unsupported or invalid view payload"));
     }
   });
   app.addEventListener("hostcontextchanged", () => {

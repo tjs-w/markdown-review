@@ -1,5 +1,5 @@
 {
-  "name": "@markdown-review/mcp-server",
+  "name": "@flowzone/mcp-server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@flowzone/contracts": "workspace:*",
     "@markdown-review/contracts": "workspace:*",
     "@markdown-review/markdown-node": "workspace:*",
     "@modelcontextprotocol/ext-apps": "^1.7.5",
