@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Serialized the validated Markdown Review chat envelope as compact, single-line JSON while retaining the adaptive Markdown fence, untrusted-data boundary, exact review schema, and lossless multiline and Unicode content.
+- Kept Submit on Codex's mandatory confirmation path with an action-specific `Submit Markdown feedback?` header, retained queued feedback when the host cancels or rejects submission, kept Review on the separate host-reviewed popup path, and advanced the universal shell cache key to `ui://flowzone/v4.html`.
 - Added local, theme-aware Mermaid rendering for fenced `mermaid` blocks in the `ui://flowzone/v2.html` shell, while preserving expandable canonical source and enforcing strict Mermaid configuration, no event binding, offline CSP, isolated SVG styles, stale-render cancellation, and per-diagram/document-wide complexity limits. The complete renderer stays inside the single offline app resource, whose measured build budget is now 4 MiB.
 - Replaced plugin-owned model tools with one schema-driven `flowzone` router backed by an immutable startup registry; Markdown Review now uses the `markdown-review/open` route while retaining its typed app-only helpers and review wire contracts.
 - Added in-process, fixed allowlisted CLI/script, and fixed HTTPS executor contracts with bounded input/output, safe errors, cancellation, progress, timeouts, idempotent-only retries, concurrency limits, circuit breaking, command/file identity checks, runtime credentials, and no redirect following.

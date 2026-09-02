@@ -88,9 +88,12 @@ function asError(error: unknown): Error {
 interface CodexFollowUpMessageOptions {
   readonly prompt: string;
   readonly scrollToBottom: boolean;
+  readonly title: string;
 }
 
 type CodexFollowUpMessageSender = (options: CodexFollowUpMessageOptions) => unknown;
+
+const CODEX_SUBMISSION_CONFIRMATION_TITLE = "Submit Markdown feedback?";
 
 function getCodexFollowUpMessageSender(hostWindow: Window):
   | {
@@ -108,6 +111,15 @@ function getCodexFollowUpMessageSender(hostWindow: Window):
     return { receiver: openai, send: send as CodexFollowUpMessageSender };
   } catch {
     return undefined;
+  }
+}
+
+function hostResultIsError(value: unknown): boolean {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") return false;
+  try {
+    return Reflect.get(value, "isError") === true;
+  } catch {
+    return true;
   }
 }
 
@@ -380,9 +392,14 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
         const directSender = getCodexFollowUpMessageSender(hostWindow);
         if (!directSender) throw new Error("Direct submission is unavailable in this host");
         const text = formatValidatedSubmission(validated);
-        await Reflect.apply(directSender.send, directSender.receiver, [
-          { prompt: text, scrollToBottom: true },
+        const result = await Reflect.apply(directSender.send, directSender.receiver, [
+          {
+            prompt: text,
+            scrollToBottom: true,
+            title: CODEX_SUBMISSION_CONFIRMATION_TITLE,
+          },
         ]);
+        if (hostResultIsError(result)) throw new Error("Codex did not accept the submission");
       },
       async review(request) {
         const validated = ReviewSubmissionSchema.parse(request);

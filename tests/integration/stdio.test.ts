@@ -101,7 +101,7 @@ describe("checked-in Node stdio bundle", () => {
         "load_markdown_review_image_chunk",
       ]);
 
-      const resource = await client.readResource({ uri: "ui://flowzone/v2.html" });
+      const resource = await client.readResource({ uri: "ui://flowzone/v4.html" });
       const content = resource.contents[0];
       expect(content?.mimeType).toBe("text/html;profile=mcp-app");
       const html = content && "text" in content ? content.text : "";

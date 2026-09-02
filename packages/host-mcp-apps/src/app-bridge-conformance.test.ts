@@ -465,10 +465,18 @@ describe("official MCP Apps AppBridge conformance", () => {
   });
 
   test("keeps direct submission and reviewed ui/message transport distinct", async () => {
-    const direct: { readonly prompt: string; readonly scrollToBottom: boolean }[] = [];
+    const direct: {
+      readonly prompt: string;
+      readonly scrollToBottom: boolean;
+      readonly title: string;
+    }[] = [];
     const reviewed: McpUiMessageRequest["params"][] = [];
     const openai = {
-      sendFollowUpMessage(options: { readonly prompt: string; readonly scrollToBottom: boolean }) {
+      sendFollowUpMessage(options: {
+        readonly prompt: string;
+        readonly scrollToBottom: boolean;
+        readonly title: string;
+      }) {
         expect(this).toBe(openai);
         direct.push(options);
         return Promise.resolve();
@@ -497,7 +505,11 @@ describe("official MCP Apps AppBridge conformance", () => {
     expect(host.ports.presentation.capabilities.reviewSubmission).toBe(true);
     await host.ports.submissions.submit(submission);
     expect(direct).toEqual([
-      { prompt: `formatted:${submission.submissionId}`, scrollToBottom: true },
+      {
+        prompt: `formatted:${submission.submissionId}`,
+        scrollToBottom: true,
+        title: "Submit Markdown feedback?",
+      },
     ]);
     expect(reviewed).toEqual([]);
 
@@ -531,7 +543,13 @@ describe("official MCP Apps AppBridge conformance", () => {
     expect(harness.host.ports.presentation.capabilities.submission).toBe(true);
     expect(harness.host.ports.presentation.capabilities.reviewSubmission).toBe(false);
     await harness.host.ports.submissions.submit(submission);
-    expect(direct).toEqual([{ prompt: JSON.stringify(submission), scrollToBottom: true }]);
+    expect(direct).toEqual([
+      {
+        prompt: JSON.stringify(submission),
+        scrollToBottom: true,
+        title: "Submit Markdown feedback?",
+      },
+    ]);
     expect(
       await rejectionMessage(
         harness.host.ports.submissions.review?.(submission) ??
@@ -623,6 +641,40 @@ describe("official MCP Apps AppBridge conformance", () => {
       await host.close();
       await bridge.close();
     }
+  });
+
+  test("treats a rejected direct host result as a failed submission without reviewed fallback", async () => {
+    const reviewed: McpUiMessageRequest["params"][] = [];
+    const [appTransport, bridgeTransport] = InMemoryTransport.createLinkedPair();
+    const bridge = new AppBridge(
+      null,
+      { name: "markdown-review-test-host", version: "1.0.0" },
+      { message: {} },
+    );
+    bridge.onmessage = (message) => {
+      reviewed.push(message);
+      return Promise.resolve({});
+    };
+    const host = createMcpAppsHost({
+      hostWindow: {
+        innerWidth: 1024,
+        openai: {
+          sendFollowUpMessage: () => Promise.resolve({ isError: true }),
+        },
+      } as unknown as Window,
+      transport: appTransport,
+      onDocument: () => undefined,
+    });
+    await bridge.connect(bridgeTransport);
+    await host.connect();
+
+    expect(await rejectionMessage(host.ports.submissions.submit(submission))).toContain(
+      "Codex did not accept the submission",
+    );
+    expect(reviewed).toEqual([]);
+
+    await host.close();
+    await bridge.close();
   });
 
   test("preserves container dimensions and reports inline height without owning host width", async () => {

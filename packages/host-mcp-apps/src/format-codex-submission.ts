@@ -2,11 +2,7 @@ import { ReviewSubmissionSchema, type ReviewSubmission } from "@markdown-review/
 
 export function formatCodexSubmission(value: unknown): string {
   const submission: ReviewSubmission = ReviewSubmissionSchema.parse(value);
-  const json = JSON.stringify(
-    { submissionId: submission.submissionId, review: submission.batch },
-    null,
-    2,
-  );
+  const json = JSON.stringify({ submissionId: submission.submissionId, review: submission.batch });
   const longestBacktickRun = [...json.matchAll(/`+/g)].reduce(
     (longest, match) => Math.max(longest, match[0].length),
     0,

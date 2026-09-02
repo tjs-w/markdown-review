@@ -1032,7 +1032,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
           ? "Submitting review feedback"
           : composerOpen
             ? "Queue or close the open comment before submitting feedback"
-            : `Submit ${count} queued ${count === 1 ? "comment" : "comments"} to Codex`,
+            : `Submit ${count} queued ${count === 1 ? "comment" : "comments"} to Codex after confirmation`,
     );
     options.setAttribute(
       "aria-label",

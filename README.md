@@ -30,7 +30,7 @@ FlowZone McpServer
        │      └── static plugin registry
        │              └── markdown-review/open
        ├── typed app-only component tools
-       └── ui://flowzone/v2.html
+       └── ui://flowzone/v4.html
 ```
 
 FlowZone exposes exactly one model-visible `flowzone` tool. Its startup-built union schema enumerates the registered plugin/action/input combinations, and the router validates both the selected input and plugin-owned output. Router annotations remain conservative because actions can have different risk. Typed plugin helpers used by the UI stay separate and are forcibly registered with `_meta.ui.visibility: ["app"]`.

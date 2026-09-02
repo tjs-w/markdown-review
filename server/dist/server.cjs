@@ -48323,7 +48323,7 @@ var FlowZoneExecutionPolicy = class {
 };
 
 // packages/mcp-server/src/ui-resource.ts
-var FLOWZONE_TEMPLATE_URI = "ui://flowzone/v2.html";
+var FLOWZONE_TEMPLATE_URI = "ui://flowzone/v4.html";
 var LEGACY_MARKDOWN_REVIEW_TEMPLATE_URI = "ui://markdown-review/v30.html";
 var FLOWZONE_BUNDLE_MARKER = "<!-- FLOWZONE_APP -->";
 var LEGACY_BUNDLE_MARKER = "<!-- MARKDOWN_REVIEW_APP -->";
