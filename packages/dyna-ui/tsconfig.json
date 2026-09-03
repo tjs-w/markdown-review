@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "rootDir": ".",
+    "outDir": "../../.build/types/dyna-ui",
+    "tsBuildInfoFile": "../../.build/types/dyna-ui.tsbuildinfo"
+  },
+  "include": ["src/**/*"],
+  "references": [{ "path": "../dyna-contracts" }]
+}

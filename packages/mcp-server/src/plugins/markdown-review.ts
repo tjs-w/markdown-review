@@ -293,6 +293,10 @@ export function createMarkdownReviewPlugin(
           payloadSchema: ReviewDocumentSchema,
           legacyMetaKey: "document",
         },
+        presentation: {
+          toolName: "render_markdown_review",
+          resourceUri: FLOWZONE_TEMPLATE_URI,
+        },
         executor: {
           kind: "module",
           async execute(input) {

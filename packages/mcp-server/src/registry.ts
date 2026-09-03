@@ -38,12 +38,20 @@ export interface RegisteredFlowZoneAppTool {
   readonly tool: FlowZoneAppTool;
 }
 
+export interface RegisteredFlowZonePresentation extends RegisteredFlowZoneAction {
+  readonly presentation: NonNullable<FlowZoneAction["presentation"]>;
+}
+
 export interface FlowZoneRegistry {
   readonly plugins: readonly FlowZonePlugin[];
   readonly actions: readonly RegisteredFlowZoneAction[];
+  readonly routerActions: readonly RegisteredFlowZoneAction[];
+  readonly presentations: readonly RegisteredFlowZonePresentation[];
   readonly appTools: readonly RegisteredFlowZoneAppTool[];
   readonly inputSchema: z.ZodType;
   readonly outputSchema: z.ZodType;
+  findRouter(plugin: string, action: string): RegisteredFlowZoneAction | undefined;
+  /** Compatibility lookup for execution-policy tests and non-routing callers. */
   find(plugin: string, action: string): RegisteredFlowZoneAction | undefined;
 }
 
@@ -111,7 +119,9 @@ function assertSdkOutputSchema(schema: z.ZodType, label: string): void {
 
 function unionOrSingle(schemas: readonly z.ZodType[]): z.ZodType {
   const first = schemas[0];
-  if (!first) throw new Error("FlowZone requires at least one action.");
+  if (!first) {
+    return z.object({ unavailable: z.never() }).strict();
+  }
   if (schemas.length === 1) return first;
   return z.union(schemas as [z.ZodType, z.ZodType, ...z.ZodType[]]);
 }
@@ -166,6 +176,7 @@ function snapshotPlugin(plugin: FlowZonePlugin): FlowZonePlugin {
       ...action,
       risk: Object.freeze({ ...action.risk }),
       ...(action.ui ? { ui: Object.freeze({ ...action.ui }) } : {}),
+      ...(action.presentation ? { presentation: Object.freeze({ ...action.presentation }) } : {}),
       executor: snapshotExecutor(action.executor),
     }),
   );
@@ -189,7 +200,10 @@ export function createFlowZoneRegistry(plugins: readonly FlowZonePlugin[]): Flow
   const pluginIds = new Set<string>();
   const appToolNames = new Set<string>(["flowzone"]);
   const routeMap = new Map<string, RegisteredFlowZoneAction>();
+  const actionMap = new Map<string, RegisteredFlowZoneAction>();
   const actions: RegisteredFlowZoneAction[] = [];
+  const routerActions: RegisteredFlowZoneAction[] = [];
+  const presentations: RegisteredFlowZonePresentation[] = [];
   const appTools: RegisteredFlowZoneAppTool[] = [];
 
   for (const plugin of registeredPlugins) {
@@ -251,11 +265,34 @@ export function createFlowZoneRegistry(plugins: readonly FlowZonePlugin[]): Flow
           `FlowZone action "${plugin.id}.${action.id}" UI payload`,
         );
       }
+      if (action.presentation) {
+        if (
+          !FLOWZONE_APP_TOOL_NAME_PATTERN.test(action.presentation.toolName) ||
+          appToolNames.has(action.presentation.toolName)
+        ) {
+          throw new Error(
+            `FlowZone presentation tool "${action.presentation.toolName}" is invalid or registered more than once.`,
+          );
+        }
+        if (!action.ui) {
+          throw new Error("FlowZone presentation actions must declare a UI payload.");
+        }
+        if (!action.presentation.resourceUri.startsWith("ui://flowzone/")) {
+          throw new Error("FlowZone presentation resources must use the ui://flowzone/ namespace.");
+        }
+        appToolNames.add(action.presentation.toolName);
+      }
       prepareExecutor(action.executor);
       const key = routeKey(plugin.id, action.id);
       const registered = Object.freeze({ plugin, action, key });
-      routeMap.set(key, registered);
+      actionMap.set(key, registered);
       actions.push(registered);
+      if (action.presentation) {
+        presentations.push(Object.freeze({ ...registered, presentation: action.presentation }));
+      } else {
+        routeMap.set(key, registered);
+        routerActions.push(registered);
+      }
     }
 
     for (const tool of plugin.appTools ?? []) {
@@ -285,7 +322,7 @@ export function createFlowZoneRegistry(plugins: readonly FlowZonePlugin[]): Flow
   }
 
   const inputSchema = unionOrSingle(
-    actions.map(({ plugin, action }) =>
+    routerActions.map(({ plugin, action }) =>
       z
         .object({
           plugin: z.literal(plugin.id),
@@ -305,11 +342,16 @@ export function createFlowZoneRegistry(plugins: readonly FlowZonePlugin[]): Flow
   return Object.freeze({
     plugins: Object.freeze(registeredPlugins),
     actions: Object.freeze(actions),
+    routerActions: Object.freeze(routerActions),
+    presentations: Object.freeze(presentations),
     appTools: Object.freeze(appTools),
     inputSchema,
     outputSchema,
-    find(plugin: string, action: string) {
+    findRouter(plugin: string, action: string) {
       return routeMap.get(routeKey(plugin, action));
+    },
+    find(plugin: string, action: string) {
+      return actionMap.get(routeKey(plugin, action));
     },
   });
 }

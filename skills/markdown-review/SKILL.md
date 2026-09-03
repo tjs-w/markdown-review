@@ -10,14 +10,10 @@ Markdown Review is the first plugin bundled with the FlowZone MCP server. Keep t
 ## Open a review
 
 1. Resolve the requested Markdown file to an absolute path. If the user has not named a file, identify the likely target from the workspace before asking.
-2. If that canonical path already has an available review in the current task, reuse it; the active component checks for source revisions and offers the user `Refresh for latest`. Otherwise, call the model-visible `flowzone` router with exactly this shape, substituting the canonical path:
+2. If that canonical path already has an available review in the current task, reuse it; the active component checks for source revisions and offers the user `Refresh for latest`. Otherwise, call the model-visible `render_markdown_review` tool with exactly this shape, substituting the canonical path:
 
    ```json
-   {
-     "plugin": "markdown-review",
-     "action": "open",
-     "input": { "path": "/absolute/path/to/document.md" }
-   }
+   { "path": "/absolute/path/to/document.md" }
    ```
 
    Do not call app-only Markdown Review helpers directly.
@@ -28,7 +24,7 @@ The tool is deliberately small. Its model-visible result contains only file meta
 
 ## Open automatically after Markdown writes
 
-After Codex creates a local `.md` or `.markdown` file as a user-facing deliverable, call `flowzone` with `plugin: "markdown-review"`, `action: "open"`, and that absolute path inside `input` after the source is written and verified. After materially editing a file that already has an available review in the current task, do not open another review: the existing component offers `Refresh for latest`, and activates the newest source revision only when the user chooses it. Reopen only when no active review exists or the prior review is unavailable. This is the default handoff even when the user did not separately ask for a preview.
+After Codex creates a local `.md` or `.markdown` file as a user-facing deliverable, call `render_markdown_review` with that absolute path after the source is written and verified. After materially editing a file that already has an available review in the current task, do not open another review: the existing component offers `Refresh for latest`, and activates the newest source revision only when the user chooses it. Reopen only when no active review exists or the prior review is unavailable. This is the default handoff even when the user did not separately ask for a preview.
 
 This skill provides invocation and feedback-handling guidance only. It is never a FlowZone runtime backend; the registered Markdown Review module performs execution.
 
@@ -53,6 +49,6 @@ If the message explicitly requests an edit:
 2. If its content no longer matches the supplied revision, relocate the passage using the quote and nearby structure; treat old line numbers as a hint.
 3. Edit the underlying Markdown directly. Preserve unrelated content, Markdown structure, reference definitions, and deliberate formatting.
 4. Verify the requested change in the source.
-5. Leave the existing review open so its revision monitor refreshes the rendered source in place. Call `flowzone` with the Markdown Review `open` route only if the prior review is unavailable.
+5. Leave the existing review open so its revision monitor refreshes the rendered source in place. Call `render_markdown_review` only if the prior review is unavailable.
 
 Do not create an HTML mirror, write changes through the MCP server, or replace the Markdown file with rendered output.

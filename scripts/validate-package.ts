@@ -18,22 +18,29 @@ async function readJson(path: string): Promise<unknown> {
 }
 
 async function validateSkill(): Promise<void> {
-  const skill = await readFile(resolve(root, "skills/markdown-review/SKILL.md"), "utf8");
-  const frontmatter = /^---\n([\s\S]+?)\n---\n/.exec(skill)?.[1];
-  if (!frontmatter) throw new Error("SKILL.md must begin with YAML frontmatter");
-  if (!/^name:\s*markdown-review\s*$/m.test(frontmatter)) {
-    throw new Error("SKILL.md frontmatter must declare name: markdown-review");
+  const skills = [
+    { path: "skills/markdown-review/SKILL.md", name: "markdown-review" },
+    { path: "skills/dyna/SKILL.md", name: "dyna" },
+  ] as const;
+  for (const definition of skills) {
+    const skill = await readFile(resolve(root, definition.path), "utf8");
+    const frontmatter = /^---\n([\s\S]+?)\n---\n/.exec(skill)?.[1];
+    if (!frontmatter) throw new Error(`${definition.path} must begin with YAML frontmatter`);
+    if (!new RegExp(`^name:\\s*${definition.name}\\s*$`, "m").test(frontmatter)) {
+      throw new Error(`${definition.path} must declare name: ${definition.name}`);
+    }
+    const description = /^description:\s*(.+)$/m.exec(frontmatter)?.[1]?.trim() ?? "";
+    if (description.length < 20 || description.length > 1_024) {
+      throw new Error(`${definition.path} description must be between 20 and 1024 characters`);
+    }
   }
-  const description = /^description:\s*(.+)$/m.exec(frontmatter)?.[1]?.trim() ?? "";
-  if (description.length < 20 || description.length > 1_024) {
-    throw new Error("SKILL.md description must be between 20 and 1024 characters");
+  const markdown = await readFile(resolve(root, "skills/markdown-review/SKILL.md"), "utf8");
+  if (!markdown.includes("render_markdown_review")) {
+    throw new Error("Markdown Review must route rendering through its presentation tool");
   }
-  if (
-    !skill.includes("flowzone") ||
-    !skill.includes('plugin: "markdown-review"') ||
-    !skill.includes('action: "open"')
-  ) {
-    throw new Error("SKILL.md must route Markdown review requests through FlowZone");
+  const dyna = await readFile(resolve(root, "skills/dyna/SKILL.md"), "utf8");
+  if (!dyna.includes('plugin: "dyna"') || !dyna.includes("render_dyna_dashboard")) {
+    throw new Error("Dyna must document its router and presentation boundaries");
   }
 }
 
@@ -61,6 +68,9 @@ async function validatePlugin(): Promise<void> {
     access(resolve(root, "server/dist/server.cjs")),
     access(resolve(root, "web/flowzone.html")),
     access(resolve(root, "web/dist/flowzone.js")),
+    access(resolve(root, "web/dyna.html")),
+    access(resolve(root, "web/dist/dyna.js")),
+    access(resolve(root, "web/dist/dyna.css")),
   ]);
 }
 

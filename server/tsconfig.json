@@ -8,5 +8,9 @@
     "tsBuildInfoFile": "../.build/types/server.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../packages/markdown-node" }, { "path": "../packages/mcp-server" }]
+  "references": [
+    { "path": "../packages/dyna-node" },
+    { "path": "../packages/markdown-node" },
+    { "path": "../packages/mcp-server" }
+  ]
 }

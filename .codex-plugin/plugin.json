@@ -1,7 +1,7 @@
 {
   "name": "flowzone",
-  "version": "0.1.0+codex.20260902213706",
-  "description": "Route registered plugin actions through one FlowZone MCP tool and universal UI, including Markdown Review.",
+  "version": "0.1.0+codex.20260903063435",
+  "description": "Run secure FlowZone apps, including Markdown Review and Dyna executive dashboards for scheduled signals.",
   "author": {
     "name": "Tejas",
     "url": "https://github.com/tjs-w"
@@ -12,22 +12,27 @@
     "codex",
     "flowzone",
     "markdown",
+    "dashboard",
+    "automation",
     "review",
     "mcp-app"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "FlowZone",
-    "shortDescription": "One MCP server for focused plugins.",
-    "longDescription": "Routes statically registered plugin actions through one schema-driven MCP tool and universal app shell. Includes Markdown Review for line-anchored feedback on rendered local Markdown.",
+    "shortDescription": "Markdown review and scheduled executive dashboards.",
+    "longDescription": "Runs statically registered FlowZone apps through one local MCP server. Includes Markdown Review for line-anchored document feedback and Dyna for persistent, actionable executive dashboards built from scheduled Slack, Outlook, GitLab, and Codex signals.",
     "developerName": "Tejas",
     "category": "Productivity",
     "capabilities": [
       "Interactive",
-      "Read"
+      "Read",
+      "Write"
     ],
     "defaultPrompt": [
       "Open a Markdown file for visual review.",
+      "Create an executive Dyna dashboard from my scheduled signals.",
+      "Open my Dyna dashboard and help me act on the highest-priority item.",
       "Render this .md and let me comment on sections.",
       "Review my Markdown and apply my feedback."
     ],

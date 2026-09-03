@@ -6,7 +6,7 @@ import { z } from "zod";
 
 import type { FlowZoneAction, FlowZonePlugin } from "../src/plugin.js";
 import { createFlowZoneServer } from "../src/server.js";
-import { FLOWZONE_TEMPLATE_URI } from "../src/ui-resource.js";
+import { FLOWZONE_TEMPLATE_URI, LEGACY_FLOWZONE_TEMPLATE_URIS } from "../src/ui-resource.js";
 
 const assetLoader = {
   load() {
@@ -99,16 +99,7 @@ describe("createFlowZoneServer", () => {
         result: { value: "beta:ready" },
       });
       expect(result.content).toEqual([{ type: "text", text: "beta plugin: beta echo completed." }]);
-      expect(result._meta?.["flowzone"]).toEqual({
-        schema: "flowzone/ui-v1",
-        plugin: "beta",
-        action: "echo",
-        view: "result",
-        payload: {
-          title: "beta plugin · beta echo",
-          message: "beta plugin: beta echo completed.",
-        },
-      });
+      expect(result._meta).toBeUndefined();
     } finally {
       await client.close();
       await server.close();
@@ -196,7 +187,18 @@ describe("createFlowZoneServer", () => {
     await client.connect(clientTransport);
     try {
       const resources = await client.listResources();
-      expect(resources.resources.map((resource) => resource.uri)).toContain(FLOWZONE_TEMPLATE_URI);
+      const resourceUris = resources.resources.map((resource) => resource.uri);
+      expect(resourceUris).toContain(FLOWZONE_TEMPLATE_URI);
+      for (const legacyUri of LEGACY_FLOWZONE_TEMPLATE_URIS) {
+        expect(resourceUris).toContain(legacyUri);
+        const legacyResource = await client.readResource({ uri: legacyUri });
+        expect(legacyResource.contents[0]?.uri).toBe(legacyUri);
+        expect(
+          legacyResource.contents[0] && "text" in legacyResource.contents[0]
+            ? legacyResource.contents[0].text
+            : "",
+        ).toContain("<\\/script");
+      }
       expect(resources.resources[0]?._meta?.["ui"]).toEqual({
         prefersBorder: true,
         csp: { connectDomains: [], resourceDomains: [], frameDomains: [] },

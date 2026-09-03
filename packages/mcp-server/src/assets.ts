@@ -17,6 +17,7 @@ export interface FileReviewUiAssetLoaderOptions {
 export interface FlowZoneUiAssets {
   readonly template: string;
   readonly bundle: string;
+  readonly stylesheet?: string;
 }
 
 export interface FlowZoneUiAssetLoader {
@@ -26,6 +27,7 @@ export interface FlowZoneUiAssetLoader {
 export interface FileFlowZoneUiAssetLoaderOptions {
   readonly templatePath: string;
   readonly bundlePath: string;
+  readonly stylesheetPath?: string;
 }
 
 export function createFileFlowZoneUiAssetLoader(
@@ -33,11 +35,14 @@ export function createFileFlowZoneUiAssetLoader(
 ): FlowZoneUiAssetLoader {
   return {
     async load(): Promise<FlowZoneUiAssets> {
-      const [template, bundle] = await Promise.all([
+      const [template, bundle, stylesheet] = await Promise.all([
         readFile(options.templatePath, "utf8"),
         readFile(options.bundlePath, "utf8"),
+        options.stylesheetPath
+          ? readFile(options.stylesheetPath, "utf8")
+          : Promise.resolve(undefined),
       ]);
-      return { template, bundle };
+      return { template, bundle, ...(stylesheet !== undefined ? { stylesheet } : {}) };
     },
   };
 }

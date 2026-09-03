@@ -70,6 +70,13 @@ export interface FlowZoneActionUi {
   readonly legacyMetaKey?: string;
 }
 
+export interface FlowZonePresentation {
+  /** Dedicated model-visible MCP tool name for this rendered surface. */
+  readonly toolName: string;
+  /** Dedicated MCP Apps resource URI rendered for this action. */
+  readonly resourceUri: string;
+}
+
 export interface FlowZoneAction {
   readonly id: string;
   readonly title: string;
@@ -79,6 +86,7 @@ export interface FlowZoneAction {
   readonly executor: FlowZoneExecutor;
   readonly risk: FlowZoneActionRisk;
   readonly ui?: FlowZoneActionUi;
+  readonly presentation?: FlowZonePresentation;
   readonly summarize?: (result: unknown) => string;
 }
 

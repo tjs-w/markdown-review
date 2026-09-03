@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -47,29 +48,127 @@ if (process.argv[2] === "--generated-fixture") {
   markdownPath = resolve(process.argv[2] ?? resolve(pluginRoot, "scripts/fixture.md"));
 }
 const requestedPort = Number(process.env["MARKDOWN_REVIEW_PORT"] ?? 43_117);
+const dynaDataDirectory =
+  generatedDirectory ?? (await mkdtemp(join(tmpdir(), "flowzone-dyna-harness-")));
 const transport = new StdioClientTransport({
   command: "node",
   args: [resolve(pluginRoot, "server/dist/server.cjs")],
   cwd: pluginRoot,
+  env: { FLOWZONE_DATA_DIR: dynaDataDirectory, PATH: process.env["PATH"] ?? "" },
   stderr: "pipe",
 });
 const client = new Client({ name: "flowzone-browser-harness", version: "0.1.0" });
 await client.connect(transport);
 
-const resource = await client.readResource({ uri: "ui://flowzone/v4.html" });
+const resource = await client.readResource({ uri: "ui://flowzone/v5.html" });
 const resourceContent = resource.contents[0];
 if (!resourceContent || !("text" in resourceContent)) {
   throw new Error("The Markdown Review HTML resource was not returned");
 }
 const opened = await client.callTool({
-  name: "flowzone",
-  arguments: {
-    plugin: "markdown-review",
-    action: "open",
-    input: { path: markdownPath },
-  },
+  name: "render_markdown_review",
+  arguments: { path: markdownPath },
 });
 if (opened.isError) throw new Error("Could not open the browser-harness Markdown fixture");
+
+function resultRecord(value: unknown): Readonly<Record<string, unknown>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected an MCP result object");
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
+const dynaResource = await client.readResource({ uri: "ui://flowzone/dyna/v1.html" });
+const dynaResourceContent = dynaResource.contents[0];
+if (!dynaResourceContent || !("text" in dynaResourceContent)) {
+  throw new Error("The Dyna HTML resource was not returned");
+}
+async function createDynaFixture(): Promise<unknown> {
+  const fixtureId = randomUUID();
+  const createdDashboard = await client.callTool({
+    name: "flowzone",
+    arguments: {
+      plugin: "dyna",
+      action: "create-dashboard",
+      input: { name: "Executive brief", description: "Decisions and risks across your work" },
+    },
+  });
+  const dashboard = resultRecord(resultRecord(createdDashboard.structuredContent)["result"]);
+  const dashboardId = dashboard["id"];
+  const createdPublisher = await client.callTool({
+    name: "flowzone",
+    arguments: {
+      plugin: "dyna",
+      action: "create-publisher",
+      input: { name: "Browser fixture schedule" },
+    },
+  });
+  const publisherResult = resultRecord(resultRecord(createdPublisher.structuredContent)["result"]);
+  const publisher = resultRecord(publisherResult["publisher"]);
+  const publisherId = publisher["id"];
+  const publisherSecret = publisherResult["secret"];
+  if (
+    typeof dashboardId !== "string" ||
+    typeof publisherId !== "string" ||
+    typeof publisherSecret !== "string"
+  ) {
+    throw new Error("Could not create the Dyna browser fixture");
+  }
+  await client.callTool({
+    name: "flowzone",
+    arguments: {
+      plugin: "dyna",
+      action: "bind-schedule",
+      input: {
+        dashboardId,
+        publisherId,
+        scheduleId: "browser-fixture-schedule",
+        scheduleTitle: "Browser fixture schedule",
+        scheduleState: "active",
+      },
+    },
+  });
+  await client.callTool({
+    name: "flowzone",
+    arguments: {
+      plugin: "dyna",
+      action: "publish-run",
+      input: {
+        publisherId,
+        secret: publisherSecret,
+        runId: "browser-fixture-run",
+        sourceCompletedAt: new Date().toISOString(),
+        mode: "replace",
+        status: "succeeded",
+        items: [
+          {
+            externalId: "gitlab:team/project!123",
+            sourceRef: {
+              source: "gitlab",
+              instanceId: fixtureId,
+              projectPath: "team/project",
+              iid: 123,
+              entityType: "merge_request",
+            },
+            sourceScope: "team/project",
+            title: "Review the release merge request",
+            summary: "The change is ready and waiting for an executive review.",
+            priority: "critical",
+            priorityReason: "The release window closes today.",
+            sourceUpdatedAt: new Date().toISOString(),
+            labels: ["release", "decision"],
+          },
+        ],
+      },
+    },
+  });
+  const openedDyna = await client.callTool({
+    name: "render_dyna_dashboard",
+    arguments: { dashboardId },
+  });
+  if (openedDyna.isError) throw new Error("Could not open the browser-harness Dyna fixture");
+  return openedDyna;
+}
 
 function safeJson(value: unknown): string {
   return JSON.stringify(value)
@@ -280,6 +379,73 @@ const hostScript = `<script>
 
 const page = resourceContent.text.replace("<body>", `<body>${hostScript}`);
 
+const dynaHostScript = (dynaResult: unknown) => `<script>
+(() => {
+  const initialResult = ${safeJson(dynaResult)};
+  const query = new URLSearchParams(window.location.search);
+  const state = window.__dynaHost = { messages: [], toolCalls: [] };
+  const respond = (id, result) => window.postMessage({ jsonrpc: "2.0", id, result }, "*");
+  const notify = (method, params) => window.postMessage({ jsonrpc: "2.0", method, params }, "*");
+  window.addEventListener("message", async (event) => {
+    const request = event.data;
+    if (event.source !== window || !request || request.jsonrpc !== "2.0" || typeof request.method !== "string") return;
+    if (request.id === undefined) {
+      if (request.method === "ui/notifications/initialized") event.stopImmediatePropagation();
+      return;
+    }
+    event.stopImmediatePropagation();
+    try {
+      let result = {};
+      if (request.method === "ui/initialize") {
+        result = {
+          protocolVersion: "2026-01-26",
+          hostInfo: { name: "flowzone-dyna-harness", version: "0.1.0" },
+          hostCapabilities: { serverTools: {}, message: {} },
+          hostContext: {
+            theme: "light",
+            displayMode: "inline",
+            availableDisplayModes: query.get("inline-only") === "1"
+              ? ["inline"]
+              : ["inline", "fullscreen"],
+            platform: "mobile",
+            deviceCapabilities: { touch: true, hover: false },
+            safeAreaInsets: { top: 8, right: 0, bottom: 10, left: 0 },
+            locale: "en-US",
+            timeZone: "America/Los_Angeles"
+          }
+        };
+        respond(request.id, result);
+        setTimeout(() => notify("ui/notifications/tool-result", initialResult), 0);
+        return;
+      }
+      if (request.method === "tools/call") {
+        state.toolCalls.push(request.params);
+        const response = await fetch("/call", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(request.params)
+        });
+        result = await response.json();
+      } else if (request.method === "ui/message") {
+        state.messages.push(request.params);
+        document.documentElement.dataset.dynaMessageCount = String(state.messages.length);
+        document.documentElement.dataset.dynaLastMessage = JSON.stringify(request.params);
+        if (query.get("action-error") === "1") result = { isError: true };
+      } else if (request.method === "ui/request-display-mode") {
+        result = { mode: request.params.mode };
+        notify("ui/notifications/host-context-changed", { displayMode: request.params.mode });
+      }
+      respond(request.id, result);
+    } catch (error) {
+      window.postMessage({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: String(error instanceof Error ? error.message : error) } }, "*");
+    }
+  });
+})();
+</script>`;
+
+const dynaPage = (dynaResult: unknown) =>
+  dynaResourceContent.text.replace("<body>", `<body>${dynaHostScript(dynaResult)}`);
+
 async function readRequestBody(request: IncomingMessage): Promise<Buffer> {
   return new Promise<Buffer>((resolveBody, rejectBody) => {
     const chunks: Buffer[] = [];
@@ -308,6 +474,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       "content-type": "text/html; charset=utf-8",
     });
     response.end(page);
+    return;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/dyna") {
+    response.writeHead(200, {
+      "cache-control": "no-store",
+      "content-type": "text/html; charset=utf-8",
+    });
+    response.end(dynaPage(await createDynaFixture()));
     return;
   }
   if (request.method === "GET" && request.url === "/health") {
@@ -362,7 +536,7 @@ async function shutdown(): Promise<void> {
     });
   });
   await client.close();
-  if (generatedDirectory) await rm(generatedDirectory, { force: true, recursive: true });
+  await rm(dynaDataDirectory, { force: true, recursive: true });
 }
 
 process.once("SIGINT", () => {

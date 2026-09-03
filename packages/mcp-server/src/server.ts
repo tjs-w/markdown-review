@@ -3,8 +3,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { FlowZoneUiAssetLoader } from "./assets.js";
 import type { FlowZonePlugin } from "./plugin.js";
 import { createFlowZoneRegistry } from "./registry.js";
-import { registerFlowZoneAppTools, registerFlowZoneRouter } from "./router.js";
-import { registerFlowZoneUi } from "./ui-resource.js";
+import {
+  registerFlowZoneAppTools,
+  registerFlowZonePresentations,
+  registerFlowZoneRouter,
+} from "./router.js";
+import {
+  registerFlowZoneUi,
+  registerFlowZoneUiResource,
+  type FlowZoneAdditionalUiResource,
+} from "./ui-resource.js";
 
 const MAX_VERSION_LENGTH = 64;
 const FLOWZONE_INSTRUCTIONS =
@@ -15,6 +23,7 @@ export interface CreateFlowZoneServerOptions {
   readonly assetLoader: FlowZoneUiAssetLoader;
   readonly allowNativeDevTools?: boolean;
   readonly includeLegacyMarkdownAlias?: boolean;
+  readonly uiResources?: readonly FlowZoneAdditionalUiResource[];
   readonly version?: string;
 }
 
@@ -54,7 +63,11 @@ export function createFlowZoneServer(options: CreateFlowZoneServerOptions): McpS
       ? { includeLegacyMarkdownAlias: options.includeLegacyMarkdownAlias }
       : {}),
   });
-  registerFlowZoneRouter(server, registry);
+  for (const resource of options.uiResources ?? []) {
+    registerFlowZoneUiResource(server, resource, options.allowNativeDevTools === true);
+  }
+  if (registry.routerActions.length > 0) registerFlowZoneRouter(server, registry);
+  registerFlowZonePresentations(server, registry);
   registerFlowZoneAppTools(server, registry);
   return server;
 }

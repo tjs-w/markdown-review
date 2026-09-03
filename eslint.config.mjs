@@ -16,7 +16,7 @@ export default tseslint.config(
   ...tseslint.configs.strictTypeChecked,
   ...tseslint.configs.stylisticTypeChecked,
   {
-    files: ["**/*.ts"],
+    files: ["**/*.{ts,tsx}"],
     languageOptions: {
       parserOptions: {
         projectService: true,
@@ -51,6 +51,8 @@ export default tseslint.config(
       "packages/contracts/src/**/*.ts",
       "packages/core/src/**/*.ts",
       "packages/review-ui/src/**/*.ts",
+      "packages/dyna-contracts/src/**/*.ts",
+      "packages/dyna-core/src/**/*.ts",
     ],
     rules: {
       "no-restricted-imports": [

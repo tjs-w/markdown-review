@@ -2,7 +2,6 @@ import { Buffer } from "node:buffer";
 
 import {
   FlowZonePrivateErrorSchema,
-  FlowZoneGenericViewPayloadSchema,
   FlowZoneRequestBaseSchema,
   FlowZoneUiEnvelopeBaseSchema,
   MAX_FLOWZONE_MODEL_TEXT_BYTES,
@@ -17,11 +16,17 @@ import { asFlowZoneExecutionError, FlowZoneExecutionError } from "./errors.js";
 import { FlowZoneExecutionPolicy } from "./execution-policy.js";
 import type { FlowZoneAppToolContext, FlowZoneProgress } from "./plugin.js";
 import type { FlowZoneRegistry, RegisteredFlowZoneAction } from "./registry.js";
-import { FLOWZONE_TEMPLATE_URI } from "./ui-resource.js";
 
 const ROUTER_NAME = "flowzone";
 const ROUTER_DESCRIPTION =
-  "Dispatch one action from a statically registered FlowZone plugin. Select the plugin and action exactly as defined by the input schema, and place only that action's arguments in input.";
+  "Dispatch one non-visual action from a statically registered FlowZone plugin. Select the plugin and action exactly as defined by the input schema, and place only that action's arguments in input.";
+
+interface ExecutionExtra {
+  readonly requestId: string | number;
+  readonly signal: AbortSignal;
+  readonly progressToken?: string | number;
+  readonly sendProgress: (progress: FlowZoneProgress) => Promise<void>;
+}
 
 function serializedBytes(value: unknown): number {
   try {
@@ -107,8 +112,7 @@ export function registerFlowZoneRouter(server: McpServer, registry: FlowZoneRegi
         idempotentHint: false,
       },
       _meta: {
-        ui: { resourceUri: FLOWZONE_TEMPLATE_URI, visibility: ["model"] },
-        "openai/outputTemplate": FLOWZONE_TEMPLATE_URI,
+        ui: { visibility: ["model"] },
         "openai/widgetAccessible": false,
         "openai/toolInvocation/invoking": "Running FlowZone…",
         "openai/toolInvocation/invoked": "FlowZone ready",
@@ -121,7 +125,7 @@ export function registerFlowZoneRouter(server: McpServer, registry: FlowZoneRegi
           throw new FlowZoneExecutionError("invalid_input", "The FlowZone request is too large.");
         }
         request = FlowZoneRequestBaseSchema.parse(rawRequest);
-        const registered = registry.find(request.plugin, request.action);
+        const registered = registry.findRouter(request.plugin, request.action);
         if (!registered) {
           throw new FlowZoneExecutionError(
             "invalid_input",
@@ -135,109 +139,163 @@ export function registerFlowZoneRouter(server: McpServer, registry: FlowZoneRegi
             "The FlowZone action input is invalid.",
           );
         }
-        const progressToken = extra._meta?.progressToken;
-        let lastProgress = -1;
-        const execution = await policy.execute(registered, parsedInput.data, {
-          plugin: request.plugin,
-          action: request.action,
+        return await executeRegistered(policy, registered, parsedInput.data, {
           requestId: extra.requestId,
           signal: extra.signal,
-          reportProgress: async (candidate) => {
+          ...(extra._meta?.progressToken !== undefined
+            ? { progressToken: extra._meta.progressToken }
+            : {}),
+          sendProgress: async (progress) => {
+            const progressToken = extra._meta?.progressToken;
             if (progressToken === undefined) return;
-            const progress = validateProgress(candidate);
-            if (progress.progress < lastProgress) {
-              throw new FlowZoneExecutionError(
-                "invalid_output",
-                "The FlowZone action reported non-monotonic progress.",
-              );
-            }
-            lastProgress = progress.progress;
             await extra.sendNotification({
               method: "notifications/progress",
               params: { progressToken, ...progress },
             });
           },
         });
-        const parsedResult = registered.action.outputSchema.safeParse(execution.result);
-        if (!parsedResult.success) {
-          throw new FlowZoneExecutionError(
-            "invalid_output",
-            "The FlowZone action returned an invalid result.",
-          );
-        }
-        if (serializedBytes(parsedResult.data) > MAX_FLOWZONE_PUBLIC_RESULT_BYTES) {
-          throw new FlowZoneExecutionError("invalid_output", "The FlowZone result is too large.");
-        }
-        const structuredContent = {
-          schema: "flowzone/result-v1" as const,
-          plugin: request.plugin,
-          action: request.action,
-          result: parsedResult.data,
-        };
-        if (serializedBytes(structuredContent) > MAX_FLOWZONE_PUBLIC_RESULT_BYTES) {
-          throw new FlowZoneExecutionError("invalid_output", "The FlowZone result is too large.");
-        }
-        const summary = safeSummary(registered, parsedResult.data);
-        const metadata: Record<string, unknown> = {};
-        if (registered.action.ui) {
-          const parsedPayload = registered.action.ui.payloadSchema.safeParse(execution.uiPayload);
-          if (!parsedPayload.success) {
-            throw new FlowZoneExecutionError(
-              "invalid_output",
-              "The FlowZone action returned an invalid UI payload.",
-            );
-          }
-          const envelope = FlowZoneUiEnvelopeBaseSchema.parse({
-            schema: "flowzone/ui-v1",
-            plugin: request.plugin,
-            action: request.action,
-            view: registered.action.ui.view,
-            payload: parsedPayload.data,
-          });
-          if (serializedBytes(envelope) > MAX_FLOWZONE_PRIVATE_RESULT_BYTES) {
-            throw new FlowZoneExecutionError(
-              "invalid_output",
-              "The FlowZone UI payload is too large.",
-            );
-          }
-          metadata["flowzone"] = envelope;
-          if (registered.action.ui.legacyMetaKey) {
-            metadata[registered.action.ui.legacyMetaKey] = parsedPayload.data;
-          }
-        } else {
-          if (execution.uiPayload !== undefined) {
-            throw new FlowZoneExecutionError(
-              "invalid_output",
-              "The FlowZone action returned an unexpected UI payload.",
-            );
-          }
-          metadata["flowzone"] = FlowZoneUiEnvelopeBaseSchema.parse({
-            schema: "flowzone/ui-v1",
-            plugin: request.plugin,
-            action: request.action,
-            view: "result",
-            payload: FlowZoneGenericViewPayloadSchema.parse({
-              title: `${registered.plugin.displayName} · ${registered.action.title}`,
-              message: summary,
-            }),
-          });
-        }
-        if (serializedBytes(metadata) > MAX_FLOWZONE_PRIVATE_RESULT_BYTES) {
-          throw new FlowZoneExecutionError(
-            "invalid_output",
-            "The FlowZone UI payload is too large.",
-          );
-        }
-        return {
-          structuredContent,
-          content: [{ type: "text" as const, text: summary }],
-          ...(Object.keys(metadata).length > 0 ? { _meta: metadata } : {}),
-        };
       } catch (error: unknown) {
         return errorResult(error, request?.plugin, request?.action);
       }
     },
   );
+}
+
+async function executeRegistered(
+  policy: FlowZoneExecutionPolicy,
+  registered: RegisteredFlowZoneAction,
+  input: unknown,
+  extra: ExecutionExtra,
+) {
+  let lastProgress = -1;
+  const execution = await policy.execute(registered, input, {
+    plugin: registered.plugin.id,
+    action: registered.action.id,
+    requestId: extra.requestId,
+    signal: extra.signal,
+    reportProgress: async (candidate) => {
+      if (extra.progressToken === undefined) return;
+      const progress = validateProgress(candidate);
+      if (progress.progress < lastProgress) {
+        throw new FlowZoneExecutionError(
+          "invalid_output",
+          "The FlowZone action reported non-monotonic progress.",
+        );
+      }
+      lastProgress = progress.progress;
+      await extra.sendProgress(progress);
+    },
+  });
+  const parsedResult = registered.action.outputSchema.safeParse(execution.result);
+  if (!parsedResult.success) {
+    throw new FlowZoneExecutionError(
+      "invalid_output",
+      "The FlowZone action returned an invalid result.",
+    );
+  }
+  if (serializedBytes(parsedResult.data) > MAX_FLOWZONE_PUBLIC_RESULT_BYTES) {
+    throw new FlowZoneExecutionError("invalid_output", "The FlowZone result is too large.");
+  }
+  const structuredContent = {
+    schema: "flowzone/result-v1" as const,
+    plugin: registered.plugin.id,
+    action: registered.action.id,
+    result: parsedResult.data,
+  };
+  const summary = safeSummary(registered, parsedResult.data);
+  const metadata: Record<string, unknown> = {};
+  if (registered.action.ui) {
+    const parsedPayload = registered.action.ui.payloadSchema.safeParse(execution.uiPayload);
+    if (!parsedPayload.success) {
+      throw new FlowZoneExecutionError(
+        "invalid_output",
+        "The FlowZone action returned an invalid UI payload.",
+      );
+    }
+    const envelope = FlowZoneUiEnvelopeBaseSchema.parse({
+      schema: "flowzone/ui-v1",
+      plugin: registered.plugin.id,
+      action: registered.action.id,
+      view: registered.action.ui.view,
+      payload: parsedPayload.data,
+    });
+    metadata["flowzone"] = envelope;
+    if (registered.action.ui.legacyMetaKey)
+      metadata[registered.action.ui.legacyMetaKey] = parsedPayload.data;
+  } else if (execution.uiPayload !== undefined) {
+    throw new FlowZoneExecutionError(
+      "invalid_output",
+      "The FlowZone action returned an unexpected UI payload.",
+    );
+  }
+  if (
+    serializedBytes(structuredContent) > MAX_FLOWZONE_PUBLIC_RESULT_BYTES ||
+    serializedBytes(metadata) > MAX_FLOWZONE_PRIVATE_RESULT_BYTES
+  ) {
+    throw new FlowZoneExecutionError("invalid_output", "The FlowZone result is too large.");
+  }
+  return {
+    structuredContent,
+    content: [{ type: "text" as const, text: summary }],
+    ...(Object.keys(metadata).length > 0 ? { _meta: metadata } : {}),
+  };
+}
+
+export function registerFlowZonePresentations(server: McpServer, registry: FlowZoneRegistry): void {
+  const policy = new FlowZoneExecutionPolicy();
+  for (const registered of registry.presentations) {
+    const { action, presentation } = registered;
+    registerAppTool(
+      server,
+      presentation.toolName,
+      {
+        title: action.title,
+        description: action.description,
+        inputSchema: action.inputSchema,
+        outputSchema: registry.outputSchema,
+        annotations: {
+          readOnlyHint: action.risk.readOnly,
+          destructiveHint: action.risk.destructive,
+          openWorldHint: action.risk.openWorld,
+          idempotentHint: action.risk.idempotent,
+        },
+        _meta: {
+          ui: { resourceUri: presentation.resourceUri, visibility: ["model"] },
+          "openai/outputTemplate": presentation.resourceUri,
+          "openai/widgetAccessible": false,
+          "openai/toolInvocation/invoking": `Opening ${action.title}…`,
+          "openai/toolInvocation/invoked": `${action.title} ready`,
+        },
+      },
+      async (rawInput, extra) => {
+        try {
+          const parsed = action.inputSchema.safeParse(rawInput);
+          if (!parsed.success)
+            throw new FlowZoneExecutionError(
+              "invalid_input",
+              "The FlowZone presentation input is invalid.",
+            );
+          return await executeRegistered(policy, registered, parsed.data, {
+            requestId: extra.requestId,
+            signal: extra.signal,
+            ...(extra._meta?.progressToken !== undefined
+              ? { progressToken: extra._meta.progressToken }
+              : {}),
+            sendProgress: async (progress) => {
+              const progressToken = extra._meta?.progressToken;
+              if (progressToken === undefined) return;
+              await extra.sendNotification({
+                method: "notifications/progress",
+                params: { progressToken, ...progress },
+              });
+            },
+          });
+        } catch (error: unknown) {
+          return errorResult(error, registered.plugin.id, action.id);
+        }
+      },
+    );
+  }
 }
 
 export function registerFlowZoneAppTools(server: McpServer, registry: FlowZoneRegistry): void {

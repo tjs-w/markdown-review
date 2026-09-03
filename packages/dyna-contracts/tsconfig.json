@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": [],
+    "rootDir": ".",
+    "outDir": "../../.build/types/dyna-contracts",
+    "tsBuildInfoFile": "../../.build/types/dyna-contracts.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"]
+}

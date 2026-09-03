@@ -310,6 +310,96 @@ describe("official MCP Apps AppBridge conformance", () => {
     }
   });
 
+  test("uses the standard clipboard API when the MCP Apps host grants clipboard write", async () => {
+    document.body.replaceChildren();
+    const writes: string[] = [];
+    let legacyCalls = 0;
+    const hadOwnExecCommand = Object.hasOwn(document, "execCommand");
+    const originalExecCommand = Reflect.get(document, "execCommand");
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: () => {
+        legacyCalls += 1;
+        return true;
+      },
+    });
+    const harness = await createHarness({
+      capabilities: { sandbox: { permissions: { clipboardWrite: {} } } },
+      hostWindow: {
+        document,
+        getSelection: () => window.getSelection(),
+        navigator: {
+          clipboard: {
+            writeText(text: string) {
+              writes.push(text);
+              return Promise.resolve();
+            },
+          },
+        },
+      } as unknown as Window,
+    });
+    try {
+      await harness.host.ports.clipboard?.writeText("Exact source selection");
+      expect(writes).toEqual(["Exact source selection"]);
+      expect(legacyCalls).toBe(0);
+    } finally {
+      await closeHarness(harness);
+      if (hadOwnExecCommand) {
+        Object.defineProperty(document, "execCommand", {
+          configurable: true,
+          value: originalExecCommand,
+        });
+      } else {
+        Reflect.deleteProperty(document, "execCommand");
+      }
+    }
+  });
+
+  test("falls back to legacy copy when a granted standard clipboard write is rejected", async () => {
+    document.body.replaceChildren();
+    let legacyValue = "";
+    let modernWrites = 0;
+    const hadOwnExecCommand = Object.hasOwn(document, "execCommand");
+    const originalExecCommand = Reflect.get(document, "execCommand");
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: () => {
+        legacyValue = (document.activeElement as HTMLTextAreaElement).value;
+        return true;
+      },
+    });
+    const harness = await createHarness({
+      capabilities: { sandbox: { permissions: { clipboardWrite: {} } } },
+      hostWindow: {
+        document,
+        getSelection: () => window.getSelection(),
+        navigator: {
+          clipboard: {
+            writeText() {
+              modernWrites += 1;
+              return Promise.reject(new DOMException("denied", "NotAllowedError"));
+            },
+          },
+        },
+      } as unknown as Window,
+    });
+    try {
+      await harness.host.ports.clipboard?.writeText("Exact source selection");
+      expect(modernWrites).toBe(1);
+      expect(legacyValue).toBe("Exact source selection");
+    } finally {
+      await closeHarness(harness);
+      if (hadOwnExecCommand) {
+        Object.defineProperty(document, "execCommand", {
+          configurable: true,
+          value: originalExecCommand,
+        });
+      } else {
+        Reflect.deleteProperty(document, "execCommand");
+      }
+    }
+  });
+
   test("falls back to the feature-detected async clipboard when legacy copy fails", async () => {
     document.body.replaceChildren();
     window.getSelection()?.removeAllRanges();

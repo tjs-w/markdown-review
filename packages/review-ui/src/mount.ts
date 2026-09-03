@@ -324,6 +324,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
   #selectionCopyText: string | null = null;
   #selectionRange: Range | null = null;
   #selectionDirection: SelectionDirection = "forward";
+  #selectionActionSelection: ActiveSelection | null = null;
   #selectionFrame: number | undefined;
   #selectionFrameNeedsCapture = false;
   #secondarySelection: ContextMenuSnapshot | null = null;
@@ -1195,6 +1196,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
 
   #dismissPendingSelection(): void {
     this.#copyOperation += 1;
+    this.#selectionActionSelection = null;
     this.#clearPendingSelection();
     this.#secondarySelection = null;
     this.#lastSelectionAnnouncement = null;
@@ -2734,6 +2736,7 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     );
     this.#closeContextMenu(false);
     this.#closeComposer(false, false);
+    this.#selectionActionSelection = null;
     this.#clearPendingSelection();
     this.#view.getSelection?.()?.removeAllRanges();
     const surface = this.#element("document");
@@ -3108,6 +3111,10 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#root.addEventListener(
       "pointerup",
       () => {
+        // Capture before yielding to the host. Embedded hosts can move focus or
+        // collapse the native range between pointerup and the next animation
+        // frame, which previously made a valid selection disappear.
+        this.#captureSelection();
         this.#scheduleSelectionAction(true);
       },
       { signal },
@@ -3319,14 +3326,32 @@ class MarkdownReviewController implements MarkdownReviewHandle {
     this.#element("selection-action").addEventListener(
       "pointerdown",
       (event) => {
+        if (event.button !== 0) return;
+        // Keep the canonical selection independently of the native range. Some
+        // iframe hosts collapse that range while dispatching the activation.
+        // Open during the user gesture because those hosts can also hide the
+        // button before pointerup/click reaches it.
+        const selection = this.#pendingSelection;
+        this.#selectionActionSelection = selection;
         event.preventDefault();
+        this.#openComposer(selection);
+      },
+      { signal },
+    );
+    this.#element("selection-action").addEventListener(
+      "pointercancel",
+      () => {
+        this.#selectionActionSelection = null;
       },
       { signal },
     );
     this.#element("selection-action").addEventListener(
       "click",
       () => {
-        this.#openComposer(this.#pendingSelection);
+        const selection = this.#selectionActionSelection ?? this.#pendingSelection;
+        this.#selectionActionSelection = null;
+        if (!this.#element("review-composer").hidden) return;
+        this.#openComposer(selection);
       },
       { signal },
     );

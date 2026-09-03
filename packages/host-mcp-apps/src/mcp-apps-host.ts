@@ -72,12 +72,15 @@ function normalizeHostCapabilities(value: unknown): {
   readonly externalLinks: boolean;
   readonly messages: boolean;
   readonly serverTools: boolean;
+  readonly clipboardWrite: boolean;
 } {
   const result = McpUiHostCapabilitiesSchema.safeParse(value);
   return {
     externalLinks: result.success && result.data.openLinks !== undefined,
     messages: result.success && result.data.message !== undefined,
     serverTools: result.success && result.data.serverTools !== undefined,
+    clipboardWrite:
+      result.success && result.data.sandbox?.permissions?.clipboardWrite !== undefined,
   };
 }
 
@@ -212,6 +215,7 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
   let externalLinks = false;
   let messages = false;
   let serverTools = false;
+  let clipboardWrite = false;
   let acceptedInitialSessionId: string | undefined;
   let pendingInitialSessionId: string | undefined;
   let pendingIntrinsicHeight: number | undefined;
@@ -252,6 +256,7 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
     externalLinks = capabilities.externalLinks;
     messages = capabilities.messages;
     serverTools = capabilities.serverTools;
+    clipboardWrite = capabilities.clipboardWrite;
     for (const listener of contextListeners) listener(context);
   };
   const closeApp = (): Promise<void> => {
@@ -448,11 +453,23 @@ export function createMcpAppsHost(options: McpAppsHostOptions): McpAppsHost {
     state: createReviewStateStore(hostWindow),
     clipboard: {
       async writeText(text) {
-        if (copyTextWithLegacyCommand(hostWindow, text)) return;
         const navigator = Reflect.get(hostWindow, "navigator") as Navigator | undefined;
         const clipboard = navigator
           ? (Reflect.get(navigator, "clipboard") as Clipboard | undefined)
           : undefined;
+        if (clipboardWrite && clipboard && typeof clipboard.writeText === "function") {
+          try {
+            await clipboard.writeText(text);
+            return;
+          } catch {
+            // A host may advertise the permission while the platform still
+            // rejects the operation. Preserve the synchronous compatibility
+            // path before the UI offers its manual-copy escape hatch.
+            if (copyTextWithLegacyCommand(hostWindow, text)) return;
+            throw new Error("Clipboard access was rejected in this host");
+          }
+        }
+        if (copyTextWithLegacyCommand(hostWindow, text)) return;
         if (!clipboard || typeof clipboard.writeText !== "function") {
           throw new Error("Clipboard access is unavailable in this host");
         }

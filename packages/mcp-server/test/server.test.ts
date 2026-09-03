@@ -137,7 +137,7 @@ describe("createMarkdownReviewServer", () => {
     try {
       const tools = await client.listTools();
       expect(tools.tools.map((tool) => tool.name)).toEqual([
-        "flowzone",
+        "render_markdown_review",
         "check_markdown_review_document",
         "load_markdown_review_document",
         "recover_markdown_review_document",
@@ -155,12 +155,8 @@ describe("createMarkdownReviewServer", () => {
       });
 
       const result = await client.callTool({
-        name: "flowzone",
-        arguments: {
-          plugin: "markdown-review",
-          action: "open",
-          input: { path: summary.path },
-        },
+        name: "render_markdown_review",
+        arguments: { path: summary.path },
       });
       expect(result.structuredContent).toEqual({
         schema: "flowzone/result-v1",

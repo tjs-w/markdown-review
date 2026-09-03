@@ -84,6 +84,7 @@ describe("checked-in Node stdio bundle", () => {
       command: "node",
       args: [resolve(pluginRoot, "server/dist/server.cjs")],
       cwd: directory,
+      env: { FLOWZONE_DATA_DIR: directory, PATH: process.env["PATH"] ?? "" },
       stderr: "pipe",
     });
     const client = new Client({ name: "markdown-review-stdio-test", version: "0.1.0" });
@@ -95,13 +96,20 @@ describe("checked-in Node stdio bundle", () => {
       const tools = await client.listTools();
       expect(tools.tools.map((tool) => tool.name)).toEqual([
         "flowzone",
+        "render_markdown_review",
+        "render_dyna_dashboard",
         "check_markdown_review_document",
         "load_markdown_review_document",
         "recover_markdown_review_document",
         "load_markdown_review_image_chunk",
+        "dyna_get_snapshot",
+        "dyna_add_annotation",
+        "dyna_prepare_action",
+        "dyna_mark_action_delivered",
+        "dyna_action_status",
       ]);
 
-      const resource = await client.readResource({ uri: "ui://flowzone/v4.html" });
+      const resource = await client.readResource({ uri: "ui://flowzone/v5.html" });
       const content = resource.contents[0];
       expect(content?.mimeType).toBe("text/html;profile=mcp-app");
       const html = content && "text" in content ? content.text : "";
@@ -112,13 +120,16 @@ describe("checked-in Node stdio bundle", () => {
       expect(html).toContain("Right-click or use Review actions ·");
       expect(html).not.toContain("FLOWZONE_APP");
 
+      const cachedResource = await client.readResource({ uri: "ui://flowzone/v3.html" });
+      const cachedContent = cachedResource.contents[0];
+      expect(cachedContent?.uri).toBe("ui://flowzone/v3.html");
+      expect(cachedContent && "text" in cachedContent ? cachedContent.text : "").toContain(
+        ">Submit<",
+      );
+
       const opened = await client.callTool({
-        name: "flowzone",
-        arguments: {
-          plugin: "markdown-review",
-          action: "open",
-          input: { path: markdownPath },
-        },
+        name: "render_markdown_review",
+        arguments: { path: markdownPath },
       });
       expect(opened.isError).toBeUndefined();
       const publicEnvelope = metadata(opened.structuredContent);

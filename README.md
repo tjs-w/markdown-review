@@ -1,8 +1,19 @@
 # FlowZone
 
-FlowZone is a local-first MCP plugin host. It exposes one MCP server endpoint and statically composes independently registered plugins behind that connection. Markdown Review is the first bundled plugin: it renders local Markdown without creating a second editable copy, queues line-anchored feedback, and submits a complete review to a coding agent in one batch.
+FlowZone is a local-first MCP plugin host. It exposes one MCP server endpoint and statically composes independently registered plugins behind that connection. It bundles Markdown Review and Dyna, a persistent executive dashboard for scheduled Slack, Outlook, GitLab, and Codex signals.
 
-> **Status:** early development. FlowZone currently ships one plugin, one local stdio endpoint, one model-visible router tool, and one universal MCP Apps shell.
+> **Status:** early development. Dyna's vertical slice is implemented; physical iOS and Android Remote acceptance remains a release gate.
+
+## Bundled plugin: Dyna
+
+- Multiple persistent dashboards and native Codex schedule identities with many-to-many bindings, cadence-aware freshness, ordered per-run promotion, retry deduplication, and full-snapshot retirement.
+- Strict source records compiled through a fixed `@json-render/core` catalog; scheduled jobs cannot supply arbitrary UI or code.
+- Accessible Apps SDK UI cards, badges, buttons, and annotation forms in a responsive executive view.
+- Re-rendering after scheduled updates, durable conversation-driven enrichment overlays, annotations, and monotonic linked task-status changes.
+- Revision-bound, claim-revalidated, per-attempt idempotent action requests with expiring leases for native Codex task creation, existing-task attachment, navigation, and status inspection.
+- A dedicated `ui://flowzone/dyna/v1.html` resource below a 750 KiB payload budget with a closed network CSP and no clipboard permission.
+
+See [Dyna executive dashboards](./docs/dyna.md) for requirements, architecture, action protocol, implementation status, and the mobile Remote acceptance matrix.
 
 ## Bundled plugin: Markdown Review
 
@@ -26,18 +37,19 @@ Codex / MCP host
        │ one stdio transport
        ▼
 FlowZone McpServer
-       ├── flowzone(plugin, action, input)
+       ├── flowzone(plugin, action, input) · data actions
        │      └── static plugin registry
        │              └── markdown-review/open
        ├── typed app-only component tools
-       └── ui://flowzone/v4.html
+       ├── render_markdown_review → ui://flowzone/v5.html
+       └── render_dyna_dashboard → ui://flowzone/dyna/v1.html
 ```
 
-FlowZone exposes exactly one model-visible `flowzone` tool. Its startup-built union schema enumerates the registered plugin/action/input combinations, and the router validates both the selected input and plugin-owned output. Router annotations remain conservative because actions can have different risk. Typed plugin helpers used by the UI stay separate and are forcibly registered with `_meta.ui.visibility: ["app"]`.
+FlowZone exposes one model-visible `flowzone` data router plus a dedicated model-visible presentation tool for each rendered surface. The startup-built router union enumerates non-visual plugin/action/input combinations and validates both selected input and plugin-owned output. Dedicated presentation tools carry their own risk and MCP Apps resource metadata. Typed helpers used by a UI stay separate and are forcibly registered with `_meta.ui.visibility: ["app"]`.
 
 The Markdown Review plugin is intentionally narrow:
 
-1. `flowzone` dispatches `plugin: "markdown-review"`, `action: "open"`, and validates an absolute `.md` or `.markdown` path inside `input`.
+1. `render_markdown_review` validates an absolute `.md` or `.markdown` path and opens the dedicated view.
 2. Component-only tools hydrate the rendered document and stream approved local raster images in bounded chunks.
 3. The model-visible tool result contains file metadata, not the complete document. The rendered content is delivered privately to the component.
 4. While the review remains open, a lightweight private revision check offers `Refresh for latest` without replacing what you are reading. Activating it loads the newest Markdown in place; Codex does not open another review for the same active path after edits.
@@ -80,7 +92,7 @@ Unshipped adapters and browser-acceptance follow-ups are tracked in [ROADMAP.md]
 Requirements:
 
 - Codex in the ChatGPT desktop app with plugin support.
-- Node.js 22 or newer available as `node`.
+- Node.js 22.13 or newer available as `node`.
 - The `codex` CLI for adding the marketplace source.
 
 Add this repository as a marketplace:
@@ -107,14 +119,10 @@ Ask Codex to open an absolute Markdown path:
 Open /absolute/path/to/document.md for Markdown review.
 ```
 
-The bundled skill translates that request to the single public router:
+The bundled skill translates that request to the Markdown presentation tool:
 
 ```json
-{
-  "plugin": "markdown-review",
-  "action": "open",
-  "input": { "path": "/absolute/path/to/document.md" }
-}
+{ "path": "/absolute/path/to/document.md" }
 ```
 
 In the review:
@@ -189,6 +197,11 @@ Review only files you intend to expose to the local FlowZone process. Submitted 
 | `.agents/plugins/marketplace.json` | Repository marketplace entry                                   |
 | `.mcp.json`                        | Bundled local MCP server configuration                         |
 | `skills/markdown-review/`          | Codex workflow and feedback-handling instructions              |
+| `skills/dyna/`                     | Schedule, publishing, dashboard, and Codex action workflow     |
+| `packages/dyna-contracts/`         | Dyna source, snapshot, action, and render-catalog schemas      |
+| `packages/dyna-core/`              | Pure Dyna snapshot-to-component compilation                    |
+| `packages/dyna-node/`              | SQLite persistence and capability-bound action state machine   |
+| `packages/dyna-ui/`                | Responsive React and Apps SDK UI dashboard                     |
 | `packages/flowzone-contracts/`     | Shared router, UI envelope, limits, and error contracts        |
 | `packages/contracts/`              | Zod schemas and JSON-safe shared types                         |
 | `packages/core/`                   | Pure queue, reference, migration, and submission state         |
@@ -200,6 +213,7 @@ Review only files you intend to expose to the local FlowZone process. Submitted 
 | `server/dist/server.cjs`           | Checked-in executable MCP server bundle                        |
 | `web/flowzone.html`                | Universal accessible FlowZone UI shell                         |
 | `web/dist/flowzone.js`             | Checked-in minified MCP Apps UI bundle                         |
+| `web/dyna.html`, `web/dist/dyna.*` | Dedicated checked-in Dyna MCP Apps resource                    |
 | `tests/` and package tests         | Unit, integration, adapter, and browser coverage               |
 
 ## Troubleshooting

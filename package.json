@@ -2,7 +2,7 @@
   "name": "flowzone",
   "version": "0.1.0",
   "private": true,
-  "description": "A single-endpoint MCP plugin host with Markdown Review bundled as its first plugin.",
+  "description": "A single-endpoint MCP plugin host with Markdown Review and Dyna executive dashboards.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tjs-w/FlowZone.git"
@@ -22,7 +22,7 @@
     "review"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "packageManager": "bun@1.4.0",
   "type": "module",
@@ -39,7 +39,7 @@
     "typecheck": "tsc -b",
     "test": "bun test packages tests/integration tests/property scripts/*.test.ts",
     "test:coverage": "bun test --coverage packages tests/integration tests/property scripts/*.test.ts && bun scripts/check-coverage.ts",
-    "test:e2e": "playwright test --project=chromium --project=webkit --project=mobile-chromium",
+    "test:e2e": "playwright test --project=chromium --project=webkit --project=mobile-chromium --project=mobile-webkit",
     "test:e2e:firefox": "playwright test --project=firefox",
     "validate:skill": "bun scripts/validate-package.ts skill",
     "validate:plugin": "bun scripts/validate-package.ts plugin",
@@ -48,11 +48,17 @@
     "verify": "bun run check && bun run test:e2e"
   },
   "dependencies": {
+    "@json-render/core": "0.20.0",
+    "@json-render/react": "0.20.0",
     "@modelcontextprotocol/ext-apps": "^1.7.5",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@openai/apps-sdk-ui": "0.2.2",
     "marked": "^18.0.10",
     "mermaid": "^11.17.2",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "sanitize-html": "^2.17.7",
+    "tailwindcss": "4.3.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -64,6 +70,8 @@
     "@testing-library/jest-dom": "^6.8.0",
     "@types/bun": "^1.2.21",
     "@types/node": "^22.0.0",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
     "@types/sanitize-html": "^2.16.0",
     "@typescript-eslint/eslint-plugin": "^8.41.0",
     "@typescript-eslint/parser": "^8.41.0",

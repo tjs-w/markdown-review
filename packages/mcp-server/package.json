@@ -4,9 +4,12 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./dyna": "./src/plugins/dyna.ts"
   },
   "dependencies": {
+    "@flowzone/dyna-contracts": "workspace:*",
+    "@flowzone/dyna-node": "workspace:*",
     "@flowzone/contracts": "workspace:*",
     "@markdown-review/contracts": "workspace:*",
     "@markdown-review/markdown-node": "workspace:*",

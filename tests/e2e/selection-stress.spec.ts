@@ -122,6 +122,28 @@ test("Escape dismisses a pending selection and permits identical reselection", a
   await expect(status).toContainText("Selection ready for feedback, Line 3");
 });
 
+test("opens feedback when the host collapses selection during plus-button activation", async ({
+  page,
+}) => {
+  const paragraph = page.locator(".review-block p").first();
+  await dragSelect(paragraph, page);
+  const action = page.locator("#selection-action");
+  await expect(action).toBeVisible();
+  await action.evaluate((element) => {
+    element.addEventListener(
+      "pointerdown",
+      () => {
+        window.getSelection()?.removeAllRanges();
+        document.dispatchEvent(new Event("selectionchange"));
+      },
+      { once: true },
+    );
+  });
+  await action.click();
+  await expect(page.locator("#review-composer")).toBeVisible();
+  await expect(page.locator("#quote")).toHaveText("Select and review this paragraph.");
+});
+
 test("reselects highlighted text after queueing a comment", async ({ page }) => {
   const paragraph = page.locator(".review-block p").first();
   await dragSelect(paragraph, page);

@@ -22,6 +22,15 @@ async function installShippingArtifacts(pluginRoot: string): Promise<void> {
       join(sourceRoot, "web", "dist", "flowzone.js"),
       join(pluginRoot, "web", "dist", "flowzone.js"),
     ),
+    copyFile(join(sourceRoot, "web", "dyna.html"), join(pluginRoot, "web", "dyna.html")),
+    copyFile(
+      join(sourceRoot, "web", "dist", "dyna.js"),
+      join(pluginRoot, "web", "dist", "dyna.js"),
+    ),
+    copyFile(
+      join(sourceRoot, "web", "dist", "dyna.css"),
+      join(pluginRoot, "web", "dist", "dyna.css"),
+    ),
   ]);
 }
 
@@ -47,24 +56,21 @@ describe("isolated shipping package", () => {
       command: "node",
       args: [join(pluginRoot, "server", "dist", "server.cjs")],
       cwd: pluginRoot,
+      env: { FLOWZONE_DATA_DIR: temporaryRoot, PATH: process.env["PATH"] ?? "" },
       stderr: "pipe",
     });
     await client.connect(transport);
     try {
       expect(client.getServerVersion()?.name).toBe("flowzone");
-      expect((await client.listTools()).tools).toHaveLength(5);
-      const resource = await client.readResource({ uri: "ui://flowzone/v4.html" });
+      expect((await client.listTools()).tools).toHaveLength(12);
+      const resource = await client.readResource({ uri: "ui://flowzone/v5.html" });
       const content = resource.contents[0];
       expect(content && "text" in content ? content.text : "").toContain(">Submit<");
       expect(
         (
           await client.callTool({
-            name: "flowzone",
-            arguments: {
-              plugin: "markdown-review",
-              action: "open",
-              input: { path: markdownPath },
-            },
+            name: "render_markdown_review",
+            arguments: { path: markdownPath },
           })
         ).isError,
       ).toBeUndefined();
@@ -83,6 +89,9 @@ describe("isolated shipping package", () => {
       writeFile(join(pluginRoot, "server", "dist", "server.cjs"), "throw new Error('old');\n"),
       writeFile(join(pluginRoot, "web", "flowzone.html"), "<title>Old review</title>\n"),
       writeFile(join(pluginRoot, "web", "dist", "flowzone.js"), "old\n"),
+      writeFile(join(pluginRoot, "web", "dyna.html"), "<title>Old Dyna</title>\n"),
+      writeFile(join(pluginRoot, "web", "dist", "dyna.js"), "old\n"),
+      writeFile(join(pluginRoot, "web", "dist", "dyna.css"), "old\n"),
     ]);
 
     await installShippingArtifacts(pluginRoot);
@@ -92,11 +101,12 @@ describe("isolated shipping package", () => {
       command: "node",
       args: [join(pluginRoot, "server", "dist", "server.cjs")],
       cwd: pluginRoot,
+      env: { FLOWZONE_DATA_DIR: temporaryRoot, PATH: process.env["PATH"] ?? "" },
       stderr: "pipe",
     });
     await client.connect(transport);
     try {
-      const resource = await client.readResource({ uri: "ui://flowzone/v4.html" });
+      const resource = await client.readResource({ uri: "ui://flowzone/v5.html" });
       const content = resource.contents[0];
       const html = content && "text" in content ? content.text : "";
       expect(html).toContain("<title>FlowZone</title>");

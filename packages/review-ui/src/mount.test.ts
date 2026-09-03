@@ -871,6 +871,25 @@ describe("mountMarkdownReview", () => {
     handle.destroy();
   });
 
+  test("opens the composer when an embedded host collapses selection during pointer activation", async () => {
+    installShell();
+    const harness = createHarness();
+    const handle = mountMarkdownReview({ ports: harness.ports, initialDocument: reviewDocument });
+    await settle();
+    selectText();
+    const action = document.getElementById("selection-action") as HTMLButtonElement;
+    action.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }),
+    );
+    window.getSelection()?.removeAllRanges();
+    document.dispatchEvent(new Event("selectionchange"));
+    expect(window.getSelection()?.isCollapsed).toBeTrue();
+    action.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+    expect(document.getElementById("review-composer")?.hidden).toBeFalse();
+    expect(document.getElementById("quote")?.textContent).toBe("First paragraph for review.");
+    handle.destroy();
+  });
+
   test("dismisses a pending native selection with Escape and permits identical reselection", async () => {
     installShell();
     const harness = createHarness();

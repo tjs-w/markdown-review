@@ -1,12 +1,12 @@
 # FlowZone architecture
 
-FlowZone is one MCP server process with one transport and one model-visible router tool. A fixed startup registry dispatches that tool to independently owned plugins. Markdown Review is the first plugin.
+FlowZone is one MCP server process with one transport, one model-visible data router, and dedicated model-visible presentation tools. A fixed startup registry dispatches actions to independently owned plugins. Markdown Review and the Dyna executive dashboard are bundled.
 
 ```text
 Codex / MCP client
         │ one local stdio transport
         ▼
-flowzone(plugin, action, input)        model-visible
+flowzone(plugin, action, input)        model-visible data actions
         │
         ▼
 static validated registry
@@ -15,8 +15,8 @@ static validated registry
         └── fixed HTTPS backend API
         │
         ▼
-ui://flowzone/v4.html                 universal MCP Apps shell
-        └── registered plugin view adapter
+render_markdown_review ──────────────> ui://flowzone/v5.html
+render_dyna_dashboard ───────────────> ui://flowzone/dyna/v1.html
 
 plugin-owned typed helper tools       app-only
 ```
@@ -25,13 +25,13 @@ The shipped transport is local stdio. A remote transport is not implied by this 
 
 ## Public MCP surface
 
-Exactly one tool is model-visible:
+The `flowzone` router is model-visible for non-visual actions:
 
 ```json
 {
-  "plugin": "markdown-review",
-  "action": "open",
-  "input": { "path": "/absolute/path/document.md" }
+  "plugin": "dyna",
+  "action": "list-dashboards",
+  "input": {}
 }
 ```
 
@@ -46,7 +46,7 @@ The router schema is a startup-built union of registered plugin/action/input bra
 }
 ```
 
-Router annotations are deliberately conservative (`readOnly: false`, `destructive: true`, `openWorld: true`, `idempotent: false`) because a single MCP tool can reach actions with different risk. Action-level risk metadata controls internal retry behavior; it does not weaken the router's advertised risk.
+Router annotations are deliberately conservative (`readOnly: false`, `destructive: true`, `openWorld: true`, `idempotent: false`) because a single MCP tool can reach actions with different risk. Each presentation action is registered as its own model-visible tool with action-specific risk metadata and a dedicated resource URI.
 
 Plugin-owned component helpers remain separate typed tools. FlowZone registers them centrally with `_meta.ui.visibility: ["app"]`, so a plugin cannot accidentally make one model-visible. Markdown Review retains its four helper names for document checks, document loading, recovery, and image chunks.
 
@@ -64,7 +64,7 @@ interface FlowZonePlugin {
 }
 ```
 
-Each action owns strict input and output Zod schemas, risk metadata, one executor, and optional UI metadata. Each UI action owns a private payload schema and a stable view ID. Every app-only helper owns its own input/output schemas and handler.
+Each action owns strict input and output Zod schemas, risk metadata, one executor, and optional UI metadata. A presentation action additionally owns a fixed tool name and resource URI. Each UI action owns a private payload schema and a stable view ID. Every app-only helper owns its own input/output schemas and handler.
 
 `createFlowZoneRegistry` validates bounded identifiers, descriptions, schema sizes, counts, duplicate routes, duplicate helper names, and executor configuration. It snapshots registration objects and their nested arrays/records before serving requests. Registration is static: there is no directory scan, runtime module import, user-selected executable, or mutable endpoint.
 
@@ -90,9 +90,9 @@ HTTP configuration uses a fixed credential-free HTTPS URL with no query, fragmen
 
 FlowZone retries only explicitly idempotent actions and only retryable failures, with a small bounded backoff. Per-action concurrency and circuit-breaker limits contain repeated backend failure.
 
-## Universal UI shell
+## Presentation resources
 
-`ui://flowzone/v4.html` is the single model-tool output resource. Public model output stays small; private UI data uses a typed metadata envelope:
+`ui://flowzone/v5.html` remains the Markdown Review output resource. `ui://flowzone/dyna/v1.html` is a separate, smaller Dyna resource with no inherited clipboard permission. Public model output stays small; private UI data uses a typed metadata envelope:
 
 ```json
 {
@@ -104,11 +104,17 @@ FlowZone retries only explicitly idempotent actions and only retryable failures,
 }
 ```
 
-The browser host dispatches that tuple through a fixed view registry. Markdown Review owns a validated document view; actions without a plugin view receive FlowZone's built-in, bounded generic result view. Unknown plugin view routes and invalid payloads fail closed. The resource CSP permits no network, remote resource, or frame domains and requests clipboard-write only. A legacy `ui://markdown-review/v30.html` resource alias serves the same shell for already cached views; new calls use only `ui://flowzone/v4.html`.
+Each presentation tool is bound to one fixed resource in the startup registry. Unknown routes and invalid payloads fail closed. Both resources permit no network, remote resource, or frame domains; only Markdown Review requests clipboard-write. Compatibility aliases for `ui://flowzone/v1.html` through `v4.html` and `ui://markdown-review/v30.html` serve the hardened Markdown shell for already cached views.
+
+## Dyna
+
+Dyna's scheduled jobs publish strict domain records, never a component tree. `@flowzone/dyna-core` deterministically compiles current records into the catalog declared by `@flowzone/dyna-contracts`, then validates the result with `json-render` before it reaches React. SQLite persistence supports many dashboards and native schedule bindings, source-completion-ordered atomic run slices, global source-reference deduplication, cadence-aware freshness, durable enrichment overlays, annotations, monotonic host-scoped task links, and a leased action-request state machine. Snapshot selection, ordering, and full counts happen in SQL before details for at most 200 cards are batch-loaded. The browser can prepare a revision- and fingerprint-bound allowlisted request; the controller revalidates those preconditions at claim time, while native task creation, navigation, and status inspection remain in the current authenticated Codex task.
+
+See [docs/dyna.md](./docs/dyna.md) for the full boundary, implementation plan, and physical mobile Remote acceptance gate.
 
 ## Markdown Review compatibility
 
-The model-visible `open_markdown_review` tool is intentionally removed at the new-task boundary. The `$markdown-review` skill invokes `flowzone` with `plugin: "markdown-review"`, `action: "open"`, and the absolute path inside `input`.
+The `$markdown-review` skill invokes `render_markdown_review` with the absolute path. Data actions remain on the router; rendered actions no longer make the router carry a universal output resource.
 
 The Markdown source remains canonical. Existing review submission schemas, state identity, document/image contracts, and app-only helper names are unchanged. A private legacy `document` metadata key accompanies the new FlowZone UI envelope during migration so cached v30 view code can hydrate safely.
 
@@ -116,7 +122,7 @@ The Markdown source remains canonical. Existing review submission schemas, state
 
 1. Implement a plugin-owned factory and schemas without importing another plugin's internal modules.
 2. Select one executor type and document its trust boundary. For CLI or HTTP, keep every destination and command field in static registration code.
-3. Register any UI view in the universal shell and keep helper tools typed and app-only.
+3. Register a dedicated presentation tool/resource for any UI view and keep helper tools typed and app-only.
 4. Add the factory to the fixed `plugins` array in `server/src/main.ts`.
 5. Add schema, error, cancellation, size, privacy, and integration tests through the public `flowzone` call.
 6. Update the skill only for invocation guidance, rotate the plugin cachebuster, rebuild checked-in artifacts, and run `bun run verify` plus Firefox acceptance.
