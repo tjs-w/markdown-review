@@ -30,7 +30,7 @@ To show another existing Codex task, inspect that exact task with the native tas
 
 A component action sends a user message of this exact form:
 
-`Handle Dyna action request <request-id> with $dyna.`
+`Handle Dyna action request <request-id> with $flowzone:dyna.`
 
 The message contains only an opaque request ID. Follow this protocol:
 

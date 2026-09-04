@@ -87,8 +87,10 @@ interface DynaUiController {
   readonly busy: boolean;
   readonly displayMode: "inline" | "fullscreen" | "pip";
   readonly canExpand: boolean;
+  readonly condenseInline: boolean;
+  readonly initialExpansionPending: boolean;
   readonly locale: string;
-  expand(): Promise<void>;
+  expand(trigger?: HTMLElement): Promise<void>;
 }
 
 const ControllerContext = createContext<DynaUiController | null>(null);
@@ -139,8 +141,17 @@ const { registry } = defineRegistry(dynaCatalog, {
               </Badge>
             </div>
             {props.description ? <p className="dyna-description">{props.description}</p> : null}
-            {controller.displayMode === "inline" && controller.canExpand ? (
-              <Button color="secondary" variant="outline" onClick={() => void controller.expand()}>
+            {controller.displayMode !== "fullscreen" &&
+            controller.canExpand &&
+            !controller.initialExpansionPending ? (
+              <Button
+                color="secondary"
+                variant="outline"
+                data-dyna-expand="true"
+                loading={controller.busy}
+                disabled={controller.busy}
+                onClick={(event) => void controller.expand(event.currentTarget)}
+              >
                 Expand dashboard
               </Button>
             ) : null}
@@ -169,7 +180,7 @@ const { registry } = defineRegistry(dynaCatalog, {
       const controller = useController();
       const allChildren = Children.toArray(children);
       const visibleChildren =
-        controller.displayMode === "inline" && controller.canExpand
+        controller.displayMode === "inline" && controller.condenseInline
           ? allChildren.slice(0, 3)
           : allChildren;
       return (
@@ -352,6 +363,8 @@ function DynaApp({ app }: { readonly app: App }) {
   const [connectionError, setConnectionError] = useState<string>();
   const [displayMode, setDisplayMode] = useState<"inline" | "fullscreen" | "pip">("inline");
   const [canExpand, setCanExpand] = useState(false);
+  const [expansionFailed, setExpansionFailed] = useState(false);
+  const [initialExpansionPending, setInitialExpansionPending] = useState(true);
   const [locale, setLocale] = useState(navigator.language);
   const current = useRef<DynaUiPayload | undefined>(undefined);
   const refreshInFlight = useRef(false);
@@ -360,6 +373,7 @@ function DynaApp({ app }: { readonly app: App }) {
     new Map<string, { readonly requestId: string; readonly idempotencyKey: string }>(),
   );
   const annotationTrigger = useRef<HTMLElement | null>(null);
+  const expansionTrigger = useRef<HTMLElement | null>(null);
   const annotationFocusAfterSave = useRef<string | undefined>(undefined);
   const dialog = useRef<HTMLDivElement | null>(null);
   current.current = payload;
@@ -392,6 +406,14 @@ function DynaApp({ app }: { readonly app: App }) {
       refreshInFlight.current = false;
     }
   }, [acceptPayload, app]);
+
+  const requestExpandedPresentation = useCallback(async (): Promise<boolean> => {
+    const result = await app.requestDisplayMode({ mode: "fullscreen" });
+    hostContext.current = { ...hostContext.current, displayMode: result.mode };
+    setDisplayMode(result.mode);
+    setExpansionFailed(result.mode !== "fullscreen");
+    return result.mode === "fullscreen";
+  }, [app]);
 
   useEffect(() => {
     let timeout: number | undefined;
@@ -443,6 +465,7 @@ function DynaApp({ app }: { readonly app: App }) {
       };
       if (context.theme === "light" || context.theme === "dark") applyDocumentTheme(context.theme);
       setDisplayMode(context.displayMode ?? "inline");
+      if (context.displayMode === "fullscreen") setExpansionFailed(false);
       setCanExpand(context.availableDisplayModes?.includes("fullscreen") ?? false);
       if (context.locale) {
         document.documentElement.lang = context.locale;
@@ -465,12 +488,24 @@ function DynaApp({ app }: { readonly app: App }) {
     app.addEventListener("hostcontextchanged", applyContext);
     void app
       .connect()
-      .then(() => {
+      .then(async () => {
         const context = app.getHostContext();
         if (context) applyContext(context);
         setConnectionError(undefined);
+        if (
+          context?.availableDisplayModes?.includes("fullscreen") &&
+          context.displayMode !== "fullscreen"
+        ) {
+          try {
+            await requestExpandedPresentation();
+          } catch {
+            setExpansionFailed(true);
+          }
+        }
+        setInitialExpansionPending(false);
       })
       .catch(() => {
+        setInitialExpansionPending(false);
         setConnectionError(
           "Could not connect to the Remote host. Dashboard actions are unavailable.",
         );
@@ -478,7 +513,7 @@ function DynaApp({ app }: { readonly app: App }) {
     return () => {
       app.removeEventListener("hostcontextchanged", applyContext);
     };
-  }, [app]);
+  }, [app, requestExpandedPresentation]);
 
   useEffect(() => {
     if (!toast) return;
@@ -489,6 +524,16 @@ function DynaApp({ app }: { readonly app: App }) {
       window.clearTimeout(timeout);
     };
   }, [toast]);
+
+  useEffect(() => {
+    const trigger = expansionTrigger.current;
+    if (!trigger || busy || initialExpansionPending || displayMode === "fullscreen") return;
+    expansionTrigger.current = null;
+    const currentTrigger = trigger.isConnected
+      ? trigger
+      : document.querySelector<HTMLElement>("[data-dyna-expand]");
+    currentTrigger?.focus();
+  }, [busy, displayMode, initialExpansionPending]);
 
   useEffect(() => {
     const itemId = annotationFocusAfterSave.current;
@@ -547,13 +592,28 @@ function DynaApp({ app }: { readonly app: App }) {
       busy,
       displayMode,
       canExpand,
+      condenseInline: canExpand && !initialExpansionPending && !expansionFailed,
+      initialExpansionPending,
       locale,
       annotate(itemId, trigger) {
         annotationTrigger.current = trigger;
         setAnnotationItem(itemId);
       },
-      async expand() {
-        await app.requestDisplayMode({ mode: "fullscreen" });
+      async expand(trigger) {
+        if (busy) return;
+        expansionTrigger.current = trigger ?? null;
+        setBusy(true);
+        try {
+          const expanded = await requestExpandedPresentation();
+          if (!expanded) {
+            setToast("Could not expand the dashboard. The complete inline view remains available.");
+          }
+        } catch {
+          setExpansionFailed(true);
+          setToast("Could not expand the dashboard. The complete inline view remains available.");
+        } finally {
+          setBusy(false);
+        }
       },
       async request(itemId, fingerprint, kind, taskId, taskHostId) {
         const active = current.current;
@@ -618,7 +678,10 @@ function DynaApp({ app }: { readonly app: App }) {
             app.sendMessage({
               role: "user",
               content: [
-                { type: "text", text: `Handle Dyna action request ${requestId} with $dyna.` },
+                {
+                  type: "text",
+                  text: `Handle Dyna action request ${requestId} with $flowzone:dyna.`,
+                },
               ],
             });
           const sent = await send();
@@ -661,7 +724,17 @@ function DynaApp({ app }: { readonly app: App }) {
         }
       },
     }),
-    [app, busy, canExpand, connectionError, displayMode, locale],
+    [
+      app,
+      busy,
+      canExpand,
+      connectionError,
+      displayMode,
+      expansionFailed,
+      initialExpansionPending,
+      locale,
+      requestExpandedPresentation,
+    ],
   );
 
   async function saveAnnotation(): Promise<void> {
@@ -765,5 +838,9 @@ document.head.append(style);
 
 const rootElement = document.querySelector<HTMLElement>("#dyna-root");
 if (!rootElement) throw new Error("Dyna root element is missing.");
-const app = new App({ name: "FlowZone Dyna", version: "0.1.0" });
+const app = new App(
+  { name: "FlowZone Dyna", version: "0.1.0" },
+  { availableDisplayModes: ["inline", "fullscreen"] },
+  { strict: true, allowUnsafeEval: false },
+);
 createRoot(rootElement).render(<DynaApp app={app} />);

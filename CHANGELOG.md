@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Request the standard MCP Apps fullscreen presentation for Dyna on connection, while preserving complete inline and accessible manual-expansion fallbacks for Remote and hosts that reject or do not advertise it; exact left/right docking remains host-owned.
+- Qualified both bundled workflows as `$flowzone:markdown-review` and `$flowzone:dyna`, updated component-generated handoffs to use those collision-safe names, and strengthened package validation so FlowZone cannot ship without both skills and its shared MCP server.
 - Added the Dyna executive-dashboard vertical slice: many-to-many native schedule/dashboard bindings, atomic retry-safe run slices, cross-schedule source deduplication, strict Slack/Outlook/GitLab/Codex records, deterministic `json-render` compilation, durable enrichment overlays, annotations, host-scoped Codex task metadata, leased revision-bound actions, and a responsive Apps SDK UI covered on desktop and mobile browser engines.
 - Split rendered actions into dedicated model-visible presentation tools (`render_markdown_review` and `render_dyna_dashboard`) while keeping non-visual plugin actions on the conservative `flowzone` router and component helpers app-only.
 - Restored fixed `ui://flowzone/v1.html` through `v4.html` compatibility resources so cached Codex views—including transient `v3` metadata—continue loading after a UI cache-key upgrade, while new tool calls still emit only `v5`.

@@ -1,6 +1,6 @@
 {
   "name": "flowzone",
-  "version": "0.1.0+codex.20260903063435",
+  "version": "0.1.0+codex.20260904060219",
   "description": "Run secure FlowZone apps, including Markdown Review and Dyna executive dashboards for scheduled signals.",
   "author": {
     "name": "Tejas",
@@ -30,11 +30,8 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Open a Markdown file for visual review.",
-      "Create an executive Dyna dashboard from my scheduled signals.",
-      "Open my Dyna dashboard and help me act on the highest-priority item.",
-      "Render this .md and let me comment on sections.",
-      "Review my Markdown and apply my feedback."
+      "Use $flowzone:markdown-review to review this Markdown file.",
+      "Use $flowzone:dyna to open my executive dashboard."
     ],
     "brandColor": "#7057D9"
   },

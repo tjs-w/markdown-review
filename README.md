@@ -2,6 +2,8 @@
 
 FlowZone is a local-first MCP plugin host. It exposes one MCP server endpoint and statically composes independently registered plugins behind that connection. It bundles Markdown Review and Dyna, a persistent executive dashboard for scheduled Slack, Outlook, GitLab, and Codex signals.
 
+Installing FlowZone installs the shared `flowzone` MCP server and both qualified skills. Invoke them explicitly as `$flowzone:markdown-review` and `$flowzone:dyna`; Codex renders their display names as **FlowZone**, **Markdown Review**, and **Dyna**.
+
 > **Status:** early development. Dyna's vertical slice is implemented; physical iOS and Android Remote acceptance remains a release gate.
 
 ## Bundled plugin: Dyna
@@ -9,6 +11,7 @@ FlowZone is a local-first MCP plugin host. It exposes one MCP server endpoint an
 - Multiple persistent dashboards and native Codex schedule identities with many-to-many bindings, cadence-aware freshness, ordered per-run promotion, retry deduplication, and full-snapshot retirement.
 - Strict source records compiled through a fixed `@json-render/core` catalog; scheduled jobs cannot supply arbitrary UI or code.
 - Accessible Apps SDK UI cards, badges, buttons, and annotation forms in a responsive executive view.
+- An automatic MCP Apps fullscreen request when the host advertises it, with host-owned docking and a complete inline fallback.
 - Re-rendering after scheduled updates, durable conversation-driven enrichment overlays, annotations, and monotonic linked task-status changes.
 - Revision-bound, claim-revalidated, per-attempt idempotent action requests with expiring leases for native Codex task creation, existing-task attachment, navigation, and status inspection.
 - A dedicated `ui://flowzone/dyna/v1.html` resource below a 750 KiB payload budget with a closed network CSP and no clipboard permission.
@@ -57,7 +60,7 @@ The Markdown Review plugin is intentionally narrow:
 
 This separation is the reason the plugin uses MCP: FlowZone connects a Codex tool invocation to a trusted interactive component. A static HTML file by itself cannot receive the selected source file, return structured review comments to the active task, or maintain this context boundary.
 
-The implementation is split into a generic FlowZone server registry and host-neutral Markdown Review workspaces. `contracts` validates every review boundary, `core` owns pure review state, `markdown-node` reads and renders local files, and `review-ui` mounts against narrow document, submission, presentation, and state ports. `host-mcp-apps` supplies a standards-based runtime whose default submission is structured JSON; the Codex browser composition explicitly adds the concise `$markdown-review` formatter. Review state is persisted locally under its opaque review-session ID so queued comments survive component remounts, while never being published as model-visible legacy widget context.
+The implementation is split into a generic FlowZone server registry and host-neutral Markdown Review workspaces. `contracts` validates every review boundary, `core` owns pure review state, `markdown-node` reads and renders local files, and `review-ui` mounts against narrow document, submission, presentation, and state ports. `host-mcp-apps` supplies a standards-based runtime whose default submission is structured JSON; the Codex browser composition explicitly adds the concise `$flowzone:markdown-review` formatter. Review state is persisted locally under its opaque review-session ID so queued comments survive component remounts, while never being published as model-visible legacy widget context.
 
 ## Adding a plugin
 
@@ -220,7 +223,7 @@ Review only files you intend to expose to the local FlowZone process. Submitted 
 
 **FlowZone is installed, but `flowzone` or a new action is not registered.** Restart the desktop app and start a new task. A task does not dynamically acquire tool schemas from a plugin installed or updated after that task began.
 
-**Codex says a cached skill path moved.** Upgrade or reinstall the marketplace plugin, restart the app, and invoke the stable skill name `$markdown-review` in a new task. Do not depend on a versioned cache path.
+**Codex says a cached skill path moved.** Upgrade or reinstall the marketplace plugin, restart the app, and invoke `$flowzone:markdown-review` or `$flowzone:dyna` in a new task. Do not depend on a versioned cache path.
 
 **The side panel is blank.** Run `bun run verify` in the plugin checkout, rebuild with `bun run build`, refresh the marketplace installation, and retry in a new task.
 

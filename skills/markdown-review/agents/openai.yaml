@@ -2,7 +2,7 @@ interface:
   display_name: "Markdown Review"
   short_description: "Open created or edited Markdown for anchored review"
   brand_color: "#7057D9"
-  default_prompt: "Use $markdown-review to open this .md file for visual review."
+  default_prompt: "Use $flowzone:markdown-review to open this .md file for visual review."
 
 policy:
   allow_implicit_invocation: true

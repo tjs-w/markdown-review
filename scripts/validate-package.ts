@@ -19,8 +19,18 @@ async function readJson(path: string): Promise<unknown> {
 
 async function validateSkill(): Promise<void> {
   const skills = [
-    { path: "skills/markdown-review/SKILL.md", name: "markdown-review" },
-    { path: "skills/dyna/SKILL.md", name: "dyna" },
+    {
+      path: "skills/markdown-review/SKILL.md",
+      agentPath: "skills/markdown-review/agents/openai.yaml",
+      name: "markdown-review",
+      invocation: "$flowzone:markdown-review",
+    },
+    {
+      path: "skills/dyna/SKILL.md",
+      agentPath: "skills/dyna/agents/openai.yaml",
+      name: "dyna",
+      invocation: "$flowzone:dyna",
+    },
   ] as const;
   for (const definition of skills) {
     const skill = await readFile(resolve(root, definition.path), "utf8");
@@ -32,6 +42,13 @@ async function validateSkill(): Promise<void> {
     const description = /^description:\s*(.+)$/m.exec(frontmatter)?.[1]?.trim() ?? "";
     if (description.length < 20 || description.length > 1_024) {
       throw new Error(`${definition.path} description must be between 20 and 1024 characters`);
+    }
+    if (!skill.includes(definition.invocation)) {
+      throw new Error(`${definition.path} must use its plugin-qualified invocation`);
+    }
+    const agent = await readFile(resolve(root, definition.agentPath), "utf8");
+    if (!agent.includes(definition.invocation)) {
+      throw new Error(`${definition.agentPath} must use its plugin-qualified invocation`);
     }
   }
   const markdown = await readFile(resolve(root, "skills/markdown-review/SKILL.md"), "utf8");
@@ -52,6 +69,19 @@ async function validatePlugin(): Promise<void> {
   }
   if (manifest["skills"] !== "./skills/" || manifest["mcpServers"] !== "./.mcp.json") {
     throw new Error("Plugin manifest must expose the skill and MCP server manifest");
+  }
+  const interfaceMetadata = asRecord(manifest["interface"], "plugin interface");
+  const defaultPrompts = interfaceMetadata["defaultPrompt"];
+  if (
+    !Array.isArray(defaultPrompts) ||
+    !defaultPrompts.some((prompt) =>
+      typeof prompt === "string" ? prompt.includes("$flowzone:markdown-review") : false,
+    ) ||
+    !defaultPrompts.some((prompt) =>
+      typeof prompt === "string" ? prompt.includes("$flowzone:dyna") : false,
+    )
+  ) {
+    throw new Error("Plugin starter prompts must expose both qualified FlowZone skills");
   }
   const mcpManifest = asRecord(await readJson(".mcp.json"), "MCP manifest");
   const servers = asRecord(mcpManifest["mcpServers"], "mcpServers");

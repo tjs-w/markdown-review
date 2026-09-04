@@ -548,7 +548,7 @@ describe("official MCP Apps AppBridge conformance", () => {
     expect(content?.type).toBe("text");
     if (content?.type !== "text") throw new Error("Expected a text message");
     expect(JSON.parse(content.text)).toEqual(submission);
-    expect(content.text).not.toContain("$markdown-review");
+    expect(content.text).not.toContain("$flowzone:markdown-review");
 
     await host.close();
     await bridge.close();

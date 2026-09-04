@@ -53,9 +53,9 @@ An active visible component polls every 15 seconds and refreshes immediately whe
 
 The browser never receives a native Codex session API. It prepares an allowlisted action through a capability-bound private tool and sends the current task only:
 
-`Handle Dyna action request <request-id> with $dyna.`
+`Handle Dyna action request <request-id> with $flowzone:dyna.`
 
-No source text, prompt, tool name, file path, or task transcript is included in that message. The `$dyna` workflow claims the request once and receives immutable context plus a one-time completion token. It then uses the native Codex task tools and completes the state machine:
+No source text, prompt, tool name, file path, or task transcript is included in that message. The `$flowzone:dyna` workflow claims the request once and receives immutable context plus a one-time completion token. It then uses the native Codex task tools and completes the state machine:
 
 ```text
 PREPARED → DELIVERED → CLAIMED → SUCCEEDED
@@ -67,7 +67,7 @@ Requests are bound to the dashboard revision, source fingerprint, item, task hos
 
 ## Mobile and Remote acceptance
 
-The Dyna surface is a single responsive column with 44-pixel mobile touch targets, no hover-only controls, no horizontal table, system typography, light/dark support, CSS and host-provided safe-area insets, and reduced-motion support. It starts as a compact inline summary and expands only after an explicit user action when fullscreen is available; inline-only hosts retain the complete content. The annotation sheet traps focus, dismisses with Escape, restores the trigger after cancel or save, and has a programmatic label. The catalog intentionally limits cards to two actions.
+The Dyna surface is a single responsive column with 44-pixel mobile touch targets, no hover-only controls, no horizontal table, system typography, light/dark support, CSS and host-provided safe-area insets, and reduced-motion support. On connection it advertises and requests the standard MCP Apps `fullscreen` presentation so Codex can open an expanded dashboard work surface alongside the task. MCP Apps does not expose a left/right docking parameter: the Codex host owns that exact placement, and the requirement to dock on the left must be verified against the target Codex desktop build. Inline-only hosts retain the complete content; a rejected expansion also reveals all cards and leaves a manual **Expand dashboard** retry with accessible failure feedback. The annotation sheet traps focus, dismisses with Escape, restores the trigger after cancel or save, and has a programmatic label. The catalog intentionally limits cards to two actions.
 
 A release is not considered mobile-ready from browser emulation alone. Acceptance requires the current iOS and Android ChatGPT mobile apps connected to a Codex Remote host:
 

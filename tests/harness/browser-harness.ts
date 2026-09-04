@@ -83,7 +83,7 @@ const dynaResourceContent = dynaResource.contents[0];
 if (!dynaResourceContent || !("text" in dynaResourceContent)) {
   throw new Error("The Dyna HTML resource was not returned");
 }
-async function createDynaFixture(): Promise<unknown> {
+async function createDynaFixture(itemCount = 1): Promise<unknown> {
   const fixtureId = randomUUID();
   const createdDashboard = await client.callTool({
     name: "flowzone",
@@ -140,25 +140,26 @@ async function createDynaFixture(): Promise<unknown> {
         sourceCompletedAt: new Date().toISOString(),
         mode: "replace",
         status: "succeeded",
-        items: [
-          {
-            externalId: "gitlab:team/project!123",
-            sourceRef: {
-              source: "gitlab",
-              instanceId: fixtureId,
-              projectPath: "team/project",
-              iid: 123,
-              entityType: "merge_request",
-            },
-            sourceScope: "team/project",
-            title: "Review the release merge request",
-            summary: "The change is ready and waiting for an executive review.",
-            priority: "critical",
-            priorityReason: "The release window closes today.",
-            sourceUpdatedAt: new Date().toISOString(),
-            labels: ["release", "decision"],
+        items: Array.from({ length: itemCount }, (_, index) => ({
+          externalId: `gitlab:team/project!${String(123 + index)}`,
+          sourceRef: {
+            source: "gitlab",
+            instanceId: fixtureId,
+            projectPath: "team/project",
+            iid: 123 + index,
+            entityType: "merge_request",
           },
-        ],
+          sourceScope: "team/project",
+          title:
+            index === 0
+              ? "Review the release merge request"
+              : `Additional priority ${String(index)}`,
+          summary: "The change is ready and waiting for an executive review.",
+          priority: index === 0 ? "critical" : "high",
+          priorityReason: "The release window closes today.",
+          sourceUpdatedAt: new Date().toISOString(),
+          labels: ["release", "decision"],
+        })),
       },
     },
   });
@@ -383,7 +384,7 @@ const dynaHostScript = (dynaResult: unknown) => `<script>
 (() => {
   const initialResult = ${safeJson(dynaResult)};
   const query = new URLSearchParams(window.location.search);
-  const state = window.__dynaHost = { messages: [], toolCalls: [] };
+  const state = window.__dynaHost = { messages: [], toolCalls: [], displayModeRequests: [] };
   const respond = (id, result) => window.postMessage({ jsonrpc: "2.0", id, result }, "*");
   const notify = (method, params) => window.postMessage({ jsonrpc: "2.0", method, params }, "*");
   window.addEventListener("message", async (event) => {
@@ -397,6 +398,18 @@ const dynaHostScript = (dynaResult: unknown) => `<script>
     try {
       let result = {};
       if (request.method === "ui/initialize") {
+        const advertisedDisplayModes = Array.isArray(
+          request.params?.appCapabilities?.availableDisplayModes,
+        )
+          ? request.params.appCapabilities.availableDisplayModes
+          : ["inline"];
+        const hostDisplayModes =
+          query.get("inline-only") === "1" ? ["inline"] : ["inline", "fullscreen"];
+        const availableDisplayModes = hostDisplayModes.filter((mode) =>
+          advertisedDisplayModes.includes(mode),
+        );
+        document.documentElement.dataset.dynaAdvertisedDisplayModes =
+          JSON.stringify(advertisedDisplayModes);
         result = {
           protocolVersion: "2026-01-26",
           hostInfo: { name: "flowzone-dyna-harness", version: "0.1.0" },
@@ -404,9 +417,7 @@ const dynaHostScript = (dynaResult: unknown) => `<script>
           hostContext: {
             theme: "light",
             displayMode: "inline",
-            availableDisplayModes: query.get("inline-only") === "1"
-              ? ["inline"]
-              : ["inline", "fullscreen"],
+            availableDisplayModes,
             platform: "mobile",
             deviceCapabilities: { touch: true, hover: false },
             safeAreaInsets: { top: 8, right: 0, bottom: 10, left: 0 },
@@ -432,11 +443,21 @@ const dynaHostScript = (dynaResult: unknown) => `<script>
         document.documentElement.dataset.dynaLastMessage = JSON.stringify(request.params);
         if (query.get("action-error") === "1") result = { isError: true };
       } else if (request.method === "ui/request-display-mode") {
-        result = { mode: request.params.mode };
-        notify("ui/notifications/host-context-changed", { displayMode: request.params.mode });
+        state.displayModeRequests.push(request.params);
+        document.documentElement.dataset.dynaDisplayModeRequestCount = String(state.displayModeRequests.length);
+        if (query.get("display-mode-delay") === "1") {
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 1_000));
+        }
+        if (query.get("display-mode-error") === "1") throw new Error("Display mode unavailable");
+        const actualMode = query.get("display-mode-result") ?? request.params.mode;
+        result = { mode: actualMode };
+        notify("ui/notifications/host-context-changed", { displayMode: actualMode });
       }
       respond(request.id, result);
     } catch (error) {
+      document.documentElement.dataset.dynaHostError = String(
+        error instanceof Error ? error.message : error,
+      );
       window.postMessage({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: String(error instanceof Error ? error.message : error) } }, "*");
     }
   });
@@ -481,7 +502,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       "cache-control": "no-store",
       "content-type": "text/html; charset=utf-8",
     });
-    response.end(dynaPage(await createDynaFixture()));
+    response.end(
+      dynaPage(await createDynaFixture(requestUrl.searchParams.get("many-items") === "1" ? 4 : 1)),
+    );
     return;
   }
   if (request.method === "GET" && request.url === "/health") {
